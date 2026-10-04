@@ -29,16 +29,15 @@ The plugin SHALL verify each payment-provider webhook before granting credit.
 It SHALL use the provider's payment/order ID as an idempotency key, so retries
 cannot create credit twice.
 
-## Private configuration
+## Runtime secret names
 
-All Wallet-specific deployment configuration uses the `PTC_WALLET_` prefix and
-is held in the ignored `.chatappenv` file beside this README. The initial keys
-are `PTC_WALLET_AUTHORIZATION_SIGNING_SECRET`,
-`PTC_WALLET_PAYPAL_CLIENT_ID`, `PTC_WALLET_PAYPAL_CLIENT_SECRET`,
-`PTC_WALLET_PAYPAL_WEBHOOK_ID`, `PTC_WALLET_YOCO_SECRET_KEY`, and
-`PTC_WALLET_YOCO_WEBHOOK_SECRET`. Only the signing secret is required for the
-current authorization service; provider credentials are required only when
-their checkout adapters are enabled.
+Wallet runtime configuration uses the `PTC_WALLET_` prefix and is supplied by
+the server's secret-management configuration. The initial names are
+`PTC_WALLET_AUTHORIZATION_SIGNING_SECRET`, `PTC_WALLET_PAYPAL_CLIENT_ID`,
+`PTC_WALLET_PAYPAL_CLIENT_SECRET`, `PTC_WALLET_PAYPAL_WEBHOOK_ID`,
+`PTC_WALLET_YOCO_SECRET_KEY`, and `PTC_WALLET_YOCO_WEBHOOK_SECRET`. Only the
+signing secret is required for the current authorization service; provider
+credentials are required only when their checkout adapters are enabled.
 
 ## Credit model
 

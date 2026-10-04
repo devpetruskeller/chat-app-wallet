@@ -11,18 +11,6 @@
 
 defined( 'ABSPATH' ) || exit;
 
-/** Loads deployment-only Wallet constants from the ignored plugin configuration. */
-function ptc_wallet_load_private_config() {
-	$config = __DIR__ . '/.chatappenv';
-	if ( ! is_readable( $config ) ) return;
-	$values = parse_ini_file( $config, false, INI_SCANNER_RAW );
-	if ( ! is_array( $values ) ) return;
-	foreach ( $values as $name => $value ) {
-		if ( 0 === strpos( $name, 'PTC_WALLET_' ) && ! defined( $name ) && '' !== trim( (string) $value ) ) define( $name, trim( (string) $value ) );
-	}
-}
-ptc_wallet_load_private_config();
-
 final class PTC_Chat_App_Wallet {
 	private static $instance;
 

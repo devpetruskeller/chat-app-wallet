@@ -13,7 +13,7 @@ defined( 'ABSPATH' ) || exit;
 
 /** Loads deployment-only Wallet constants from the ignored plugin configuration. */
 function ptc_wallet_load_private_config() {
-	$config = dirname( __DIR__ ) . '/.chatappenv';
+	$config = __DIR__ . '/.chatappenv';
 	if ( ! is_readable( $config ) ) return;
 	$values = parse_ini_file( $config, false, INI_SCANNER_RAW );
 	if ( ! is_array( $values ) ) return;

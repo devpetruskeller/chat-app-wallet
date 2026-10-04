@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      DEPLOY_TARGET: /var/www/api.postoochat.com/public/wp-content/plugins/chat-app-wallet
+      DEPLOY_TARGET: /var/www/api.postoochat.com/public/wp-content/plugins/chap-app-wallet
     steps:
       - uses: actions/checkout@v4
       - name: Validate PHP syntax

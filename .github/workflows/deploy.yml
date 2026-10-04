@@ -32,6 +32,13 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+      - name: Verify deployment settings
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          test -n "$DEPLOY_HOST" || { echo "Missing production secret: DEPLOY_HOST"; exit 1; }
+          test -n "$DEPLOY_USER" || { echo "Missing production secret: DEPLOY_USER"; exit 1; }
       - name: Synchronize plugin
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}

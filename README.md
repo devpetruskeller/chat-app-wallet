@@ -39,6 +39,19 @@ the server's secret-management configuration. The initial names are
 signing secret is required for the current authorization service; provider
 credentials are required only when their checkout adapters are enabled.
 
+For the PayPal Sandbox adapter, the public listener URL is:
+
+```
+https://api.postoochat.com/wp-json/chat-app-wallet/v1/paypal/webhook
+```
+
+Create the webhook in the PayPal developer dashboard with that URL, then place
+the returned webhook ID in `PTC_WALLET_PAYPAL_WEBHOOK_ID` through the server's
+runtime secret configuration. The listener verifies PayPal's signature using
+the configured client credentials before storing an idempotent receipt. It
+does not grant credits until a checkout order/capture has been bound to a
+Wallet purchase.
+
 ## Credit model
 
 The initial commercial model is prepaid credit burn-down:

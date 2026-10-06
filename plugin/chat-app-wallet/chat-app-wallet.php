@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -22,6 +22,7 @@ final class PTC_Chat_App_Wallet {
 	private function __construct() {
 		add_action( 'admin_menu', array( $this, 'add_admin_page' ) );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+		add_action( 'admin_post_ptc_wallet_revoke_access', array( $this, 'handle_revoke_access' ) );
 	}
 
 	/** Public provider endpoint; PayPal authenticity is verified inside the callback. */
@@ -136,10 +137,62 @@ final class PTC_Chat_App_Wallet {
 
 	public function render_admin_page() {
 		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'You are not allowed to manage wallets.', 'chat-app-wallet' ) );
+		$search = sanitize_text_field( wp_unslash( $_GET['wallet_search'] ?? '' ) );
+		$identities = $this->suite_identities();
+		$wallets = $this->wallets_by_identity();
+		$visible = array_filter( $identities, function( $identity ) use ( $search ) {
+			$haystack = strtolower( implode( ' ', array( $identity['channel'] ?? '', $identity['sender_address'] ?? '', $identity['selected_app'] ?? '', $identity['stage'] ?? '', $identity['updated_at'] ?? '' ) ) );
+			return '' === $search || false !== strpos( $haystack, strtolower( $search ) );
+		} );
+		$linked = 0;
+		foreach ( $identities as $identity ) if ( isset( $wallets[ $this->identity_key( $identity ) ] ) ) $linked++;
 		?>
 		<div class="wrap"><h1><?php esc_html_e( 'Chat App Wallet', 'chat-app-wallet' ); ?></h1>
-		<p><?php esc_html_e( 'Wallet payment providers and rate policies will be configured here. Chat apps obtain one-use billing authorizations through the registered PHP service.', 'chat-app-wallet' ); ?></p></div>
+		<p><?php esc_html_e( 'Wallet support, identity access, usage and refunds. A revoke stops future Suite access; it does not erase ledger history.', 'chat-app-wallet' ); ?></p>
+		<?php if ( isset( $_GET['wallet_notice'] ) ) : ?><div class="notice notice-<?php echo 'revoked' === $_GET['wallet_notice'] ? 'success' : 'error'; ?>"><p><?php echo esc_html( 'revoked' === $_GET['wallet_notice'] ? 'Consent and access were revoked.' : 'The requested wallet operation could not be completed.' ); ?></p></div><?php endif; ?>
+		<div style="display:flex;gap:24px;margin:16px 0"><div><strong><?php echo esc_html( count( $identities ) ); ?></strong><br>known identities</div><div><strong><?php echo esc_html( $linked ); ?></strong><br>with linked wallet</div><div><strong><?php echo esc_html( max( 0, count( $identities ) - $linked ) ); ?></strong><br>without wallet</div></div>
+		<form method="get" style="margin:16px 0"><input type="hidden" name="page" value="chat-app-wallet"><label for="wallet_search">Search wallets / identities </label><input id="wallet_search" name="wallet_search" value="<?php echo esc_attr( $search ); ?>" placeholder="number, channel, app, status, activity date"><button class="button">Search</button></form>
+		<table class="widefat striped"><thead><tr><th>Identity</th><th>App</th><th>Status</th><th>Wallet balance</th><th>Last activity</th><th>Actions</th></tr></thead><tbody>
+		<?php foreach ( $visible as $identity ) : $key = $this->identity_key( $identity ); $wallet = $wallets[ $key ] ?? null; ?>
+		<tr><td><?php echo esc_html( $key ); ?></td><td><?php echo esc_html( $identity['selected_app'] ?? '—' ); ?></td><td><?php echo esc_html( $identity['stage'] ?? '—' ); ?></td><td><?php echo esc_html( $wallet ? $wallet['balance'] . ' ' . $wallet['currency'] : 'No linked wallet' ); ?></td><td><?php echo esc_html( $identity['updated_at'] ?? '—' ); ?></td><td><?php if ( 'revoked' !== ( $identity['stage'] ?? '' ) ) : ?><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('Revoke consent and access for this identity?');"><input type="hidden" name="action" value="ptc_wallet_revoke_access"><input type="hidden" name="channel" value="<?php echo esc_attr( $identity['channel'] ); ?>"><input type="hidden" name="sender_address" value="<?php echo esc_attr( $identity['sender_address'] ); ?>"><?php wp_nonce_field( 'ptc_wallet_revoke_access' ); ?><input required name="reason" maxlength="500" placeholder="Reason for revocation"><button class="button button-link-delete">Revoke consent &amp; access</button></form><?php else : ?>Revoked<?php endif; ?></td></tr>
+		<?php endforeach; if ( ! $visible ) : ?><tr><td colspan="6">No identities found.</td></tr><?php endif; ?></tbody></table></div>
 		<?php
+	}
+
+	private function identity_key( $identity ) {
+		$channel = sanitize_key( $identity['channel'] ?? '' );
+		$address = sanitize_text_field( $identity['sender_address'] ?? '' );
+		return 0 === strpos( $address, $channel . ':' ) ? $address : $channel . ':' . $address;
+	}
+
+	private function operations_request( $body ) {
+		$url = defined( 'PTC_WALLET_OPERATIONS_URL' ) ? esc_url_raw( PTC_WALLET_OPERATIONS_URL ) : '';
+		$token = defined( 'PTC_WALLET_OPERATIONS_TOKEN' ) ? trim( PTC_WALLET_OPERATIONS_TOKEN ) : '';
+		if ( ! $url || ! $token ) return new WP_Error( 'wallet_operations_not_configured' );
+		$response = wp_remote_post( $url, array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ), 'body' => wp_json_encode( $body ) ) );
+		if ( is_wp_error( $response ) ) return $response;
+		$data = json_decode( wp_remote_retrieve_body( $response ), true );
+		return 200 === wp_remote_retrieve_response_code( $response ) && is_array( $data ) && ! empty( $data['ok'] ) ? $data : new WP_Error( 'wallet_operations_request_failed' );
+	}
+
+	private function suite_identities() {
+		$result = $this->operations_request( array( 'action' => 'identities.list' ) );
+		return is_wp_error( $result ) ? array() : (array) ( $result['identities'] ?? array() );
+	}
+
+	private function wallets_by_identity() {
+		global $wpdb;
+		$entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$rows = $wpdb->get_results( "SELECT e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id GROUP BY e.entity_id, e.display_name, w.currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$result = array(); foreach ( $rows as $row ) $result[ $row['display_name'] ] = $row; return $result;
+	}
+
+	public function handle_revoke_access() {
+		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'You are not allowed to revoke access.', 'chat-app-wallet' ) );
+		check_admin_referer( 'ptc_wallet_revoke_access' );
+		$user = wp_get_current_user();
+		$result = $this->operations_request( array( 'action' => 'identity.revoke', 'channel' => sanitize_key( $_POST['channel'] ?? '' ), 'senderAddress' => sanitize_text_field( wp_unslash( $_POST['sender_address'] ?? '' ) ), 'reason' => sanitize_textarea_field( wp_unslash( $_POST['reason'] ?? '' ) ), 'actor' => $user->user_login ) );
+		wp_safe_redirect( add_query_arg( array( 'page' => 'chat-app-wallet', 'wallet_notice' => is_wp_error( $result ) ? 'failed' : 'revoked' ), admin_url( 'tools.php' ) ) ); exit;
 	}
 }
 
@@ -164,9 +217,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '2' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '3' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '2', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '3', false );
 	}
 }
 add_action( 'plugins_loaded', 'ptc_chat_app_wallet_maybe_upgrade_schema', 4 );

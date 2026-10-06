@@ -39,6 +39,13 @@ the server's secret-management configuration. The initial names are
 signing secret is required for the current authorization service; provider
 credentials are required only when their checkout adapters are enabled.
 
+The support UI additionally needs `PTC_WALLET_OPERATIONS_URL` (the deployed
+Supabase `wallet-operations` function URL) and the matching
+`PTC_WALLET_OPERATIONS_TOKEN`. The token is an independent high-entropy secret:
+place the same value in Supabase as `PT_WALLET_OPERATIONS_TOKEN` and in the
+server's `wp-config.php` as `PTC_WALLET_OPERATIONS_TOKEN`. It is never entered
+in the WordPress dashboard.
+
 For the PayPal Sandbox adapter, the public listener URL is:
 
 ```
@@ -114,6 +121,26 @@ for speed, but every balance must be explainable from ledger entries.
 Every entry SHALL include an immutable ID, wallet scope, channel, currency or
 credit unit, amount, reason, linked payment or communication ID, actor/source,
 and timestamp.
+
+## Support and identity operations UI
+
+**Tools → Chat App Wallet** is the operations view for channel identities. It
+lists Suite identities, their selected app and activity state, their linked
+wallet balance, and the number of identities without a wallet. Search accepts
+a mobile/address, channel, app, onboarding status, or visible activity date.
+
+To associate a wallet with a channel identity, the wallet entity display name
+must use its canonical identity value: `whatsapp:+27811234567` or
+`telegram:701258963`. This is a display/index key for support lookup; it does
+not merge WhatsApp and Telegram people or alter the Suite identity model.
+
+The **Revoke consent & access** action requires an operator reason and a
+WordPress administrator session. It calls the protected Supabase Wallet
+Operations boundary, which records the revocation, invalidates the identity's
+Suite state and active app session, and requires fresh onboarding before a
+future entry. It deliberately retains the wallet ledger and minimal revocation
+audit record. Refunds must be separate immutable `refund` ledger entries, never
+edits to an original charge.
 
 ## Insufficient credit contract
 

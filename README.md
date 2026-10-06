@@ -44,7 +44,9 @@ Supabase `wallet-operations` function URL) and the matching
 `PTC_WALLET_OPERATIONS_TOKEN`. The token is an independent high-entropy secret:
 place the same value in Supabase as `PT_WALLET_OPERATIONS_TOKEN` and in the
 server's `wp-config.php` as `PTC_WALLET_OPERATIONS_TOKEN`. It is never entered
-in the WordPress dashboard.
+in the WordPress dashboard. The ignored `.chatappenv` file is a local reference
+only; WordPress does not load it. The production constants must be defined in
+`wp-config.php`.
 
 For the PayPal Sandbox adapter, the public listener URL is:
 

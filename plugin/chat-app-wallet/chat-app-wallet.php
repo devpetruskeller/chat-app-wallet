@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.2.0
+ * Version: 0.2.1
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -138,7 +138,9 @@ final class PTC_Chat_App_Wallet {
 	public function render_admin_page() {
 		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'You are not allowed to manage wallets.', 'chat-app-wallet' ) );
 		$search = sanitize_text_field( wp_unslash( $_GET['wallet_search'] ?? '' ) );
-		$identities = $this->suite_identities();
+		$identity_result = $this->suite_identities();
+		$operations_error = is_wp_error( $identity_result ) ? $identity_result : null;
+		$identities = $operations_error ? array() : $identity_result;
 		$wallets = $this->wallets_by_identity();
 		$visible = array_filter( $identities, function( $identity ) use ( $search ) {
 			$haystack = strtolower( implode( ' ', array( $identity['channel'] ?? '', $identity['sender_address'] ?? '', $identity['selected_app'] ?? '', $identity['stage'] ?? '', $identity['updated_at'] ?? '' ) ) );
@@ -149,6 +151,7 @@ final class PTC_Chat_App_Wallet {
 		?>
 		<div class="wrap"><h1><?php esc_html_e( 'Chat App Wallet', 'chat-app-wallet' ); ?></h1>
 		<p><?php esc_html_e( 'Wallet support, identity access, usage and refunds. A revoke stops future Suite access; it does not erase ledger history.', 'chat-app-wallet' ); ?></p>
+		<?php if ( $operations_error ) : ?><div class="notice notice-error"><p><?php echo esc_html( 'Identity data is unavailable: ' . $operations_error->get_error_code() . '. Check PTC_WALLET_OPERATIONS_URL and PTC_WALLET_OPERATIONS_TOKEN in wp-config.php, then confirm the matching Supabase Edge Function secret.' ); ?></p></div><?php endif; ?>
 		<?php if ( isset( $_GET['wallet_notice'] ) ) : ?><div class="notice notice-<?php echo 'revoked' === $_GET['wallet_notice'] ? 'success' : 'error'; ?>"><p><?php echo esc_html( 'revoked' === $_GET['wallet_notice'] ? 'Consent and access were revoked.' : 'The requested wallet operation could not be completed.' ); ?></p></div><?php endif; ?>
 		<div style="display:flex;gap:24px;margin:16px 0"><div><strong><?php echo esc_html( count( $identities ) ); ?></strong><br>known identities</div><div><strong><?php echo esc_html( $linked ); ?></strong><br>with linked wallet</div><div><strong><?php echo esc_html( max( 0, count( $identities ) - $linked ) ); ?></strong><br>without wallet</div></div>
 		<form method="get" style="margin:16px 0"><input type="hidden" name="page" value="chat-app-wallet"><label for="wallet_search">Search wallets / identities </label><input id="wallet_search" name="wallet_search" value="<?php echo esc_attr( $search ); ?>" placeholder="number, channel, app, status, activity date"><button class="button">Search</button></form>
@@ -177,7 +180,7 @@ final class PTC_Chat_App_Wallet {
 
 	private function suite_identities() {
 		$result = $this->operations_request( array( 'action' => 'identities.list' ) );
-		return is_wp_error( $result ) ? array() : (array) ( $result['identities'] ?? array() );
+		return is_wp_error( $result ) ? $result : (array) ( $result['identities'] ?? array() );
 	}
 
 	private function wallets_by_identity() {

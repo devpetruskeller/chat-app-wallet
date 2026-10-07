@@ -139,10 +139,13 @@ not merge WhatsApp and Telegram people or alter the Suite identity model.
 The **Revoke consent & access** action requires an operator reason and a
 WordPress administrator session. It calls the protected Supabase Wallet
 Operations boundary, which records the revocation, invalidates the identity's
-Suite state and active app session, and requires fresh onboarding before a
-future entry. It deliberately retains the wallet ledger and minimal revocation
-audit record. Refunds must be separate immutable `refund` ledger entries, never
-edits to an original charge.
+Suite onboarding profile, confirmed mobile number, TOTP seed, active session
+and remembered app, and requires fresh onboarding before a future entry. This
+is intentionally the same personal-data reset as the Suite `WITHDRAW` keyword;
+the additional retained record is the admin actor, timestamp and required
+reason. It deliberately retains the wallet ledger and minimal revocation audit
+record. Refunds must be separate immutable `refund` ledger entries, never edits
+to an original charge.
 
 ## Insufficient credit contract
 

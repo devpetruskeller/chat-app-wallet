@@ -144,8 +144,10 @@ and remembered app, and requires fresh onboarding before a future entry. This
 is intentionally the same personal-data reset as the Suite `WITHDRAW` keyword;
 the additional retained record is the admin actor, timestamp and required
 reason. It deliberately retains the wallet ledger and minimal revocation audit
-record. Refunds must be separate immutable `refund` ledger entries, never edits
-to an original charge.
+record. For Telegram, the same protected operation also removes an outstanding
+native number-confirmation keyboard, so a stale control cannot be mistaken for
+current consent. Refunds must be separate immutable `refund` ledger entries,
+never edits to an original charge.
 
 ## Insufficient credit contract
 

@@ -6,9 +6,12 @@
 collects money, records the commercial transaction, manages credit purchases
 and adjustments, and gives a customer or Workspace clear wallet controls.
 
-It does not send WhatsApp or Telegram messages. It authorizes billable sends
-locally for chat-app plugins, while Supabase SB Coms verifies and clips the
-one-use authorization before routing the logical communication.
+It does not implement provider mechanics. It authorizes billable sends locally
+for chat-app plugins, while Supabase SB Coms verifies and clips the one-use
+authorization before routing the logical communication. On a Wallet refusal,
+Wallet may submit a non-billable factual notification through its restricted
+registered SB Coms application identity; the notification is defined by
+Message Center in the `postoochat_wallet` group, never as an SB Coms seed.
 
 ## Initial payment providers
 
@@ -74,19 +77,29 @@ The initial commercial model is prepaid credit burn-down:
   `Menu`, `Home`, `Close`, and `Exit`) are not billable by default;
 - failed provider dispatches do not consume a final credit.
 
-## Wallet scopes
+## Owned and shared Wallets
 
-Wallets are scoped to the billable customer account or Workspace, not to a
-single chat application. A Workspace may have separate channel wallets:
+Suite onboarding never creates, selects, links or funds a Wallet. When a
+channel identity completes Suite verification, Wallet provisions a distinct,
+zero-balance **owned Wallet profile** for that canonical channel identity.
+This profile is not a credit grant and does not merge WhatsApp and Telegram.
+
+Wallet may grant an identity access to a **shared Wallet** owned by an approved
+customer account, household, team or other commercial entity. Only Wallet
+administration creates shared Wallets or grants/revokes access, and it owns
+their scope, app/channel eligibility, sponsorship priority and spending limits.
+Chat apps never select a payer or administer either Wallet type.
+
+Owned and shared Wallets may have separate channel balances:
 
 ```text
-Account / Workspace
-├─ WhatsApp wallet
+Owned or shared Wallet
+├─ WhatsApp balance
 │  └─ balance, rate card, low-balance and auto-recharge settings
-├─ Telegram wallet
+├─ Telegram balance
 │  └─ balance, rate card, low-balance and auto-recharge settings
-└─ Optional shared fallback wallet
-   └─ used only when its configured fallback rule permits it
+└─ Wallet-owned payer policy
+   └─ owned/shared eligibility, sponsorship and credit-limit decisions
 ```
 
 This makes differing channel costs visible and allows a customer to fund one
@@ -98,7 +111,7 @@ channel without unintentionally funding another.
 | --- | --- |
 | Chat App Wallet (WordPress) | Customer accounts, checkout, PayPal/Yoco adapters, payment webhooks, invoices, tax/accounting records, credit purchases, grants, refunds, wallet configuration, statements and reconciliation. |
 | Supabase SB Coms | Verify and consume one-use billing authorizations, prevent replay, retain a minimal authorization/communication/outcome receipt, and report delivery outcomes. It does not hold wallets, entities, prices, sponsorship rules, or accounting ledgers. |
-| Chat application (for example Chatti) | Business workflow only. It never processes card payments or edits a wallet balance. |
+| Chat application (for example Chatti) | Business workflow only. It supplies communication facts to Wallet and never processes card payments, selects a Wallet/payer, sets a price, reads a balance, or edits Wallet policy. |
 | Message Center | Message definitions and presentation only. |
 
 The Wallet plugin SHALL NOT edit SB Coms tables directly. Conversely, SB Coms
@@ -113,9 +126,11 @@ for speed, but every balance must be explainable from ledger entries.
 2. An authorised promotion or support correction creates a `grant`, `refund`,
    or `adjustment` entry with an actor and reason.
 3. Before requesting SB Coms dispatch, the chat app calls the Wallet plugin's
-   registered PHP service. The Wallet plugin creates a `reserve` entry and
-   returns a short-lived, one-use signed authorization bound to the app,
-   channel, and idempotency key.
+   registered PHP service with only its app ID, channel, subject and recipient
+   channel identities, authoritative business reference, billing meter and
+   idempotency key. Wallet resolves the owned/shared payer and creates a
+   `reserve` entry. It returns a short-lived, one-use signed authorization
+   bound to the app, channel, meter and idempotency key.
 4. SB Coms verifies and clips that authorization once before provider dispatch.
 5. Provider acceptance converts the reservation to `consume`; a rejection,
    cancellation, or unrecoverable failure creates `release`.
@@ -127,14 +142,14 @@ and timestamp.
 ## Support and identity operations UI
 
 **Tools → Chat App Wallet** is the operations view for channel identities. It
-lists Suite identities, their selected app and activity state, their linked
-wallet balance, and the number of identities without a wallet. Search accepts
+lists Suite identities, their selected app and activity state, their owned
+Wallet profile, shared-Wallet access and available funding state. Search accepts
 a mobile/address, channel, app, onboarding status, or visible activity date.
 
-To associate a wallet with a channel identity, the wallet entity display name
-must use its canonical identity value: `whatsapp:+27811234567` or
-`telegram:701258963`. This is a display/index key for support lookup; it does
-not merge WhatsApp and Telegram people or alter the Suite identity model.
+An owned Wallet profile uses the canonical identity value
+`whatsapp:+27811234567` or `telegram:701258963` as its display/index key. A
+shared Wallet is attached by a Wallet-owned access grant. Neither relationship
+merges WhatsApp and Telegram people or alters the Suite identity model.
 
 The **Revoke consent & access** action requires an operator reason and a
 WordPress administrator session. It calls the protected Supabase Wallet
@@ -149,11 +164,70 @@ native number-confirmation keyboard, so a stale control cannot be mistaken for
 current consent. Refunds must be separate immutable `refund` ledger entries,
 never edits to an original charge.
 
+## Chat-app communication contract
+
+All chat apps on the same WordPress server SHALL call the registered PHP
+service, not local HTTP, before a potentially billable SB Coms command:
+
+```php
+$decision = postoochat_wallet()->authorize_message( array(
+    'app_id'             => 'booki',
+    'channel'            => 'telegram',
+    'subject_identity'   => 'telegram:701258963',
+    'recipient_identity' => 'telegram:123456789',
+    'business_reference' => 'booking:abc-123',
+    'billing_meter'      => 'outbound_standard',
+    'idempotency_key'    => 'booking:abc-123:reminder-01',
+) );
+```
+
+The chat app MUST NOT pass or choose a wallet ID, payer, price, balance, credit
+limit or shared-Wallet preference. Wallet returns either a signed one-use
+authorization for the original SB Coms command or a deterministic refusal. The
+authorization is passed unchanged as the command's billing authorization; SB
+Coms verifies and consumes it before provider dispatch.
+
+### Signed authorization ticket
+
+For a billable Message Center definition, the chat app passes Wallet's response
+unchanged in the SB Coms command as `billingAuthorization`. The ticket is not a
+wallet-selection or pricing input; `payerReference` is an opaque reference and
+`reservedAmount` is Wallet's already-resolved reservation.
+
+```json
+{
+  "billingAuthorization": {
+    "claims": {
+      "authorizationId": "uuid",
+      "appId": "booki",
+      "channel": "telegram",
+      "billingMeter": "outbound_standard",
+      "idempotencyKey": "…",
+      "businessReference": "…",
+      "payerReference": "opaque-sha256-reference",
+      "reservedAmount": "1.000000",
+      "unit": "CRD",
+      "expiresAt": "ISO-8601",
+      "signature": "HMAC-SHA256"
+    }
+  }
+}
+```
+
+SB Coms verifies the signature and every binding before atomically consuming
+the authorization. A non-billable definition has no `billing_meter` and MUST
+NOT include `billingAuthorization`.
+
 ## Insufficient credit contract
 
-When a wallet cannot fund a billable send, the PHP service returns
-`credit_balance_exhausted` to the requesting app. No authorization is issued,
-so SB Coms never receives a dispatch command and no provider send is attempted.
+When Wallet cannot fund a billable send, it returns a deterministic refusal such
+as `credit_balance_exhausted`. No authorization is issued, so SB Coms rejects
+the original billable command and no provider send is attempted. Wallet may
+then submit the applicable non-billable Message Center definition from the
+`postoochat_wallet` group—normally `WALLET_CREDIT_REQUIRED`—using Wallet's
+restricted registered SB Coms application identity. That definition contains
+the factual funding/top-up presentation and approved action; it is not an SB
+Coms seed message and the requesting chat app does not choose it.
 
 ## Registered PHP authorization service
 
@@ -165,11 +239,11 @@ HTTP. The eventual interface is conceptually:
 $authorization = postoochat_wallet()->authorize_message( $request );
 ```
 
-The request identifies the calling app, its own entity/workspace reference,
-channel, billing meter, and outbound idempotency key. The response is either a
-deterministic refusal or a signed, one-use authorization. The signature is
-necessary because Supabase is outside WordPress and must verify the ticket
-without accessing Wallet records.
+The request identifies the calling app, channel, channel identities,
+authoritative business reference, billing meter and outbound idempotency key.
+The response is either a deterministic refusal or a signed, one-use
+authorization. The signature is necessary because Supabase is outside WordPress
+and must verify the ticket without accessing Wallet records.
 
 ## Future capabilities
 

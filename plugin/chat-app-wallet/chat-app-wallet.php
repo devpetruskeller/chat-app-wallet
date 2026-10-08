@@ -273,9 +273,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '4' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '5' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '4', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '5', false );
 	}
 }
 add_action( 'plugins_loaded', 'ptc_chat_app_wallet_maybe_upgrade_schema', 4 );

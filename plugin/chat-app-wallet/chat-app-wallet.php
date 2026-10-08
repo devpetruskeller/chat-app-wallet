@@ -44,10 +44,7 @@ final class PTC_Chat_App_Wallet {
 		$body = $request->get_json_params(); $channel = sanitize_key( $body['channel'] ?? '' ); $identity = sanitize_text_field( $body['identity'] ?? '' );
 		if ( ! in_array( $channel, array( 'telegram', 'whatsapp' ), true ) || 0 !== strpos( $identity, $channel . ':' ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_identity' ), 422 );
 		$provisioned = $this->provision_owned_wallet( $channel, $identity );
-		if ( is_wp_error( $provisioned ) ) {
-			global $wpdb;
-			return new WP_REST_Response( array( 'ok' => false, 'error' => $provisioned->get_error_code(), 'diagnostic' => substr( (string) $wpdb->last_error, 0, 300 ) ), 503 );
-		}
+		if ( is_wp_error( $provisioned ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $provisioned->get_error_code() ), 503 );
 		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $grants = $wpdb->prefix . 'ptc_wallet_access_grants';
 		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ) );
 		$balance = $wallet_id ? (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet_id ) ) : 0.0;
@@ -268,6 +265,12 @@ function ptc_chat_app_wallet_install_schema() {
 	$authorizations = $wpdb->prefix . 'ptc_wallet_authorizations';
 	$receipts = $wpdb->prefix . 'ptc_wallet_provider_receipts';
 	dbDelta( "CREATE TABLE $entities ( entity_id char(36) NOT NULL, entity_type varchar(32) NOT NULL, display_name varchar(191) NOT NULL, identity_key varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (entity_id), UNIQUE KEY identity_key (identity_key) ) $charset;" );
+	// dbDelta does not reliably add a newly indexed column to an existing
+	// plugin table. Upgrade pre-Wallet identity tables explicitly and safely.
+	$identity_column = $wpdb->get_var( "SHOW COLUMNS FROM $entities LIKE 'identity_key'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+	if ( ! $identity_column ) $wpdb->query( "ALTER TABLE $entities ADD COLUMN identity_key varchar(191) NULL" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+	$identity_index = $wpdb->get_var( "SHOW INDEX FROM $entities WHERE Key_name = 'identity_key'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+	if ( ! $identity_index ) $wpdb->query( "ALTER TABLE $entities ADD UNIQUE KEY identity_key (identity_key)" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	dbDelta( "CREATE TABLE $wallets ( wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, channel varchar(16) NOT NULL, currency char(3) NOT NULL, status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, PRIMARY KEY (wallet_id), UNIQUE KEY entity_channel_currency (entity_id, channel, currency) ) $charset;" );
 	dbDelta( "CREATE TABLE $ledger ( ledger_id char(36) NOT NULL, wallet_id char(36) NOT NULL, event_type varchar(32) NOT NULL, credits decimal(18,6) NOT NULL, reference_id varchar(191) NULL, reason varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (ledger_id), KEY wallet_created (wallet_id, created_at) ) $charset;" );
 	dbDelta( "CREATE TABLE $authorizations ( authorization_id char(36) NOT NULL, wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, app_id varchar(64) NOT NULL, channel varchar(16) NOT NULL, meter varchar(64) NOT NULL, idempotency_key varchar(191) NOT NULL, reserved_credits decimal(18,6) NOT NULL, state varchar(16) NOT NULL, expires_at datetime NOT NULL, signature char(64) NOT NULL, claims longtext NULL, created_at datetime NOT NULL, PRIMARY KEY (authorization_id), UNIQUE KEY app_idempotency (app_id, idempotency_key), KEY wallet_state (wallet_id, state) ) $charset;" );
@@ -277,9 +280,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '5' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '6' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '5', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '6', false );
 	}
 }
 add_action( 'plugins_loaded', 'ptc_chat_app_wallet_maybe_upgrade_schema', 4 );

@@ -43,7 +43,8 @@ final class PTC_Chat_App_Wallet {
 		if ( ! $expected || ! hash_equals( $expected, $actual ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'unauthorized' ), 401 );
 		$body = $request->get_json_params(); $channel = sanitize_key( $body['channel'] ?? '' ); $identity = sanitize_text_field( $body['identity'] ?? '' );
 		if ( ! in_array( $channel, array( 'telegram', 'whatsapp' ), true ) || 0 !== strpos( $identity, $channel . ':' ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_identity' ), 422 );
-		if ( is_wp_error( $this->provision_owned_wallet( $channel, $identity ) ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'wallet_unavailable' ), 503 );
+		$provisioned = $this->provision_owned_wallet( $channel, $identity );
+		if ( is_wp_error( $provisioned ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $provisioned->get_error_code() ), 503 );
 		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $grants = $wpdb->prefix . 'ptc_wallet_access_grants';
 		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ) );
 		$balance = $wallet_id ? (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet_id ) ) : 0.0;

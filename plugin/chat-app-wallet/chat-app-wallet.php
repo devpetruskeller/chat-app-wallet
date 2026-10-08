@@ -12,6 +12,7 @@
 defined( 'ABSPATH' ) || exit;
 
 final class PTC_Chat_App_Wallet {
+	const DEFAULT_TIMEZONE = 'Africa/Johannesburg';
 	private static $instance;
 
 	public static function instance() {
@@ -46,10 +47,12 @@ final class PTC_Chat_App_Wallet {
 		$provisioned = $this->provision_owned_wallet( $channel, $identity );
 		if ( is_wp_error( $provisioned ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $provisioned->get_error_code() ), 503 );
 		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $grants = $wpdb->prefix . 'ptc_wallet_access_grants';
-		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ) );
+		$wallet = $wpdb->get_row( $wpdb->prepare( "SELECT w.wallet_id, w.timezone FROM $wallets w JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ), ARRAY_A );
+		$wallet_id = $wallet['wallet_id'] ?? ''; $timezone = $wallet['timezone'] ?? self::DEFAULT_TIMEZONE;
+		try { $as_of = ( new DateTimeImmutable( 'now', new DateTimeZone( 'UTC' ) ) )->setTimezone( new DateTimeZone( $timezone ) )->format( 'Y-m-d H:i T' ); } catch ( Exception $error ) { $as_of = gmdate( 'Y-m-d H:i' ) . ' UTC'; }
 		$balance = $wallet_id ? (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet_id ) ) : 0.0;
 		$shared = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $grants WHERE identity_key=%s AND status='active'", $identity ) );
-		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'as_of_display' => gmdate( 'Y-m-d H:i' ) . ' UTC', 'owned_credit_display' => number_format_i18n( $balance, 3 ) . ' CRD', 'owned_wallet_label' => 'Your Wallet', 'owned_wallet_status' => 'Active', 'return_app_label' => 'Return to app', 'shared_access_count' => (string) (int) $shared, 'shared_access_summary' => (int) $shared ? 'Shared access available.' : 'No shared wallet access.' ) ), 200 );
+		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'as_of_display' => $as_of, 'owned_credit_display' => number_format_i18n( $balance, 3 ) . ' CRD', 'owned_wallet_label' => 'Your Wallet', 'owned_wallet_status' => 'Active', 'return_app_label' => 'Return to app', 'shared_access_count' => (string) (int) $shared, 'shared_access_summary' => (int) $shared ? 'Shared access available.' : 'No shared wallet access.' ) ), 200 );
 	}
 	public function authorization_outcome_endpoint( WP_REST_Request $request ) {
 		$secret = defined( 'PTC_WALLET_AUTHORIZATION_SIGNING_SECRET' ) ? PTC_WALLET_AUTHORIZATION_SIGNING_SECRET : '';
@@ -82,7 +85,7 @@ final class PTC_Chat_App_Wallet {
 		$entity = $wpdb->get_var( $wpdb->prepare( "SELECT entity_id FROM $entities WHERE identity_key = %s", $identity ) );
 		if ( ! $entity ) { $entity = wp_generate_uuid4(); if ( ! $wpdb->insert( $entities, array( 'entity_id' => $entity, 'entity_type' => 'owned_identity', 'display_name' => $identity, 'identity_key' => $identity, 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_Error( 'wallet_profile_store_failed' ); }
 		$wallet = $wpdb->get_var( $wpdb->prepare( "SELECT wallet_id FROM $wallets WHERE entity_id = %s AND channel = %s", $entity, $channel ) );
-		if ( ! $wallet ) { $wallet = wp_generate_uuid4(); if ( ! $wpdb->insert( $wallets, array( 'wallet_id' => $wallet, 'entity_id' => $entity, 'channel' => $channel, 'currency' => 'CRD', 'status' => 'active', 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_Error( 'wallet_profile_store_failed' ); }
+		if ( ! $wallet ) { $wallet = wp_generate_uuid4(); if ( ! $wpdb->insert( $wallets, array( 'wallet_id' => $wallet, 'entity_id' => $entity, 'channel' => $channel, 'currency' => 'CRD', 'timezone' => self::DEFAULT_TIMEZONE, 'status' => 'active', 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_Error( 'wallet_profile_store_failed' ); }
 		return array( 'identity' => $identity, 'wallet_reference' => hash( 'sha256', $wallet ) );
 	}
 
@@ -271,7 +274,9 @@ function ptc_chat_app_wallet_install_schema() {
 	if ( ! $identity_column ) $wpdb->query( "ALTER TABLE $entities ADD COLUMN identity_key varchar(191) NULL" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	$identity_index = $wpdb->get_var( "SHOW INDEX FROM $entities WHERE Key_name = 'identity_key'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	if ( ! $identity_index ) $wpdb->query( "ALTER TABLE $entities ADD UNIQUE KEY identity_key (identity_key)" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-	dbDelta( "CREATE TABLE $wallets ( wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, channel varchar(16) NOT NULL, currency char(3) NOT NULL, status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, PRIMARY KEY (wallet_id), UNIQUE KEY entity_channel_currency (entity_id, channel, currency) ) $charset;" );
+	dbDelta( "CREATE TABLE $wallets ( wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, channel varchar(16) NOT NULL, currency char(3) NOT NULL, timezone varchar(64) NOT NULL DEFAULT 'Africa/Johannesburg', status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, PRIMARY KEY (wallet_id), UNIQUE KEY entity_channel_currency (entity_id, channel, currency) ) $charset;" );
+	$timezone_column = $wpdb->get_var( "SHOW COLUMNS FROM $wallets LIKE 'timezone'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+	if ( ! $timezone_column ) $wpdb->query( "ALTER TABLE $wallets ADD COLUMN timezone varchar(64) NOT NULL DEFAULT 'Africa/Johannesburg'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	dbDelta( "CREATE TABLE $ledger ( ledger_id char(36) NOT NULL, wallet_id char(36) NOT NULL, event_type varchar(32) NOT NULL, credits decimal(18,6) NOT NULL, reference_id varchar(191) NULL, reason varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (ledger_id), KEY wallet_created (wallet_id, created_at) ) $charset;" );
 	dbDelta( "CREATE TABLE $authorizations ( authorization_id char(36) NOT NULL, wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, app_id varchar(64) NOT NULL, channel varchar(16) NOT NULL, meter varchar(64) NOT NULL, idempotency_key varchar(191) NOT NULL, reserved_credits decimal(18,6) NOT NULL, state varchar(16) NOT NULL, expires_at datetime NOT NULL, signature char(64) NOT NULL, claims longtext NULL, created_at datetime NOT NULL, PRIMARY KEY (authorization_id), UNIQUE KEY app_idempotency (app_id, idempotency_key), KEY wallet_state (wallet_id, state) ) $charset;" );
 	$grants = $wpdb->prefix . 'ptc_wallet_access_grants';
@@ -280,9 +285,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '6' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '7' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '6', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '7', false );
 	}
 }
 add_action( 'plugins_loaded', 'ptc_chat_app_wallet_maybe_upgrade_schema', 4 );

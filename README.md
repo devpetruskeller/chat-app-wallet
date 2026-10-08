@@ -42,6 +42,12 @@ the server's secret-management configuration. The initial names are
 signing secret is required for the current authorization service; provider
 credentials are required only when their checkout adapters are enabled.
 
+PayPal top-up packages are disabled unless `PTC_WALLET_PAYPAL_TOPUP_PACKAGES`
+contains a server-managed JSON package list. Each package must have a stable
+`sku`, ISO currency, decimal amount, and credit quantity. This is deliberately
+not a client or chat-app setting: no default conversion rate is inferred and
+the Sandbox checkout adapter refuses an unknown or unconfigured package.
+
 The support UI additionally needs `PTC_WALLET_OPERATIONS_URL` (the deployed
 Supabase `wallet-operations` function URL) and the matching
 `PTC_WALLET_OPERATIONS_TOKEN`. The token is an independent high-entropy secret:
@@ -134,6 +140,11 @@ for speed, but every balance must be explainable from ledger entries.
 4. SB Coms verifies and clips that authorization once before provider dispatch.
 5. Provider acceptance converts the reservation to `consume`; a rejection,
    cancellation, or unrecoverable failure creates `release`.
+
+Reservations expire after five minutes. The Wallet hourly recovery task creates
+exactly one `release` entry for any still-reserved expired authorization, so a
+lost SB Coms outcome cannot hold credit indefinitely. All accounting timestamps
+remain UTC; the Wallet timezone is only a presentation and reporting boundary.
 
 Every entry SHALL include an immutable ID, wallet scope, channel, currency or
 credit unit, amount, reason, linked payment or communication ID, actor/source,

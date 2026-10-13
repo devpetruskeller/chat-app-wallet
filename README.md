@@ -57,6 +57,11 @@ in the WordPress dashboard. The ignored `.chatappenv` file is a local reference
 only; WordPress does not load it. The production constants must be defined in
 `wp-config.php`.
 
+The 2FA-protected operator controls additionally require
+`PTC_WALLET_2FA_URL` (the deployed `registry-2fa` function URL) and
+`PTC_WALLET_2FA_TOKEN` (the same protected management credential accepted as
+`PT_REGISTRY_MANAGEMENT_TOKEN` in Supabase).
+
 For the PayPal Sandbox adapter, the public listener URL is:
 
 ```
@@ -82,6 +87,16 @@ The initial commercial model is prepaid credit burn-down:
 - inbound messages, internal callbacks, and Suite System replies (`Start`,
   `Menu`, `Home`, `Close`, and `Exit`) are not billable by default;
 - failed provider dispatches do not consume a final credit.
+
+### Channel rate card
+
+Wallet maintains independent Telegram and WhatsApp defaults for USD per credit
+and credits required. A message override is channel-specific and must be above
+the active channel default. Raising a default supersedes lower/equal active
+overrides while retaining their audit history. The Rate Card UI reads only
+billable definitions from the active Message Center release in Supabase through
+the protected `wallet-operations` `catalog.billable` action. Every rate change
+requires a fresh Registry-authority TOTP approval bound to the exact change.
 
 ## Owned and shared Wallets
 
@@ -188,6 +203,8 @@ $decision = postoochat_wallet()->authorize_message( array(
     'recipient_identity' => 'telegram:123456789',
     'business_reference' => 'booking:abc-123',
     'billing_meter'      => 'outbound_standard',
+    'message_group'      => 'postoochat_booki',
+    'message_name'       => 'BOOKING_REMINDER',
     'idempotency_key'    => 'booking:abc-123:reminder-01',
 ) );
 ```

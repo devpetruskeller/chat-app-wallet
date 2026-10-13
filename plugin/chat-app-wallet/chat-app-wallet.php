@@ -52,6 +52,7 @@ final class PTC_Chat_App_Wallet {
 		if ( ! $this->authenticate_presentation_request( $request ) ) return new WP_Error( 'unauthorized' );
 		$body = $request->get_json_params(); $channel = sanitize_key( $body['channel'] ?? '' ); $identity = sanitize_text_field( $body['identity'] ?? '' );
 		if ( ! in_array( $channel, array( 'telegram', 'whatsapp' ), true ) || 0 !== strpos( $identity, $channel . ':' ) ) return new WP_Error( 'invalid_identity' );
+		$identity = $this->canonical_identity( $channel, $identity );
 		$profile = $this->provision_owned_wallet( $channel, $identity );
 		return is_wp_error( $profile ) ? $profile : array( $channel, $identity, $body );
 	}
@@ -119,12 +120,19 @@ final class PTC_Chat_App_Wallet {
 
 	public function provision_owned_wallet( $channel, $identity ) {
 		if ( ! in_array( $channel, array( 'telegram', 'whatsapp' ), true ) || 0 !== strpos( $identity, $channel . ':' ) ) return new WP_Error( 'wallet_invalid_identity' );
+		$identity = $this->canonical_identity( $channel, $identity );
 		global $wpdb; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets';
 		$entity = $wpdb->get_var( $wpdb->prepare( "SELECT entity_id FROM $entities WHERE identity_key = %s", $identity ) );
 		if ( ! $entity ) { $entity = wp_generate_uuid4(); if ( ! $wpdb->insert( $entities, array( 'entity_id' => $entity, 'entity_type' => 'owned_identity', 'display_name' => $identity, 'identity_key' => $identity, 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_Error( 'wallet_profile_store_failed' ); }
 		$wallet = $wpdb->get_var( $wpdb->prepare( "SELECT wallet_id FROM $wallets WHERE entity_id = %s AND channel = %s", $entity, $channel ) );
 		if ( ! $wallet ) { $wallet = wp_generate_uuid4(); if ( ! $wpdb->insert( $wallets, array( 'wallet_id' => $wallet, 'entity_id' => $entity, 'channel' => $channel, 'currency' => 'CRD', 'timezone' => self::DEFAULT_TIMEZONE, 'status' => 'active', 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_Error( 'wallet_profile_store_failed' ); }
 		return array( 'identity' => $identity, 'wallet_reference' => hash( 'sha256', $wallet ) );
+	}
+
+	private function canonical_identity( $channel, $identity ) {
+		$prefix = $channel . ':'; $value = sanitize_text_field( $identity );
+		while ( 0 === strpos( $value, $prefix ) ) $value = substr( $value, strlen( $prefix ) );
+		return $prefix . $value;
 	}
 
 	public function handle_paypal_webhook( WP_REST_Request $request ) {
@@ -288,7 +296,7 @@ final class PTC_Chat_App_Wallet {
 	private function identity_key( $identity ) {
 		$channel = sanitize_key( $identity['channel'] ?? '' );
 		$address = sanitize_text_field( $identity['sender_address'] ?? '' );
-		return 0 === strpos( $address, $channel . ':' ) ? $address : $channel . ':' . $address;
+		return $this->canonical_identity( $channel, $address );
 	}
 
 	private function operations_request( $body ) {
@@ -401,12 +409,23 @@ function ptc_chat_app_wallet_install_schema() {
 		if ( ! $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM $grants LIKE %s", $column ) ) ) $wpdb->query( "ALTER TABLE $grants ADD COLUMN $definition" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	}
 	dbDelta( "CREATE TABLE $receipts ( provider varchar(32) NOT NULL, provider_event_id varchar(191) NOT NULL, event_type varchar(96) NOT NULL, payload longtext NOT NULL, received_at datetime NOT NULL, PRIMARY KEY (provider, provider_event_id) ) $charset;" );
+	// Earlier SB Coms payloads could contain an already-prefixed sender address.
+	// Repair only unambiguous duplicate prefixes; never merge a second entity.
+	foreach ( array( 'telegram', 'whatsapp' ) as $channel ) {
+		$duplicate = $channel . ':' . $channel . ':%';
+		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT entity_id, identity_key FROM $entities WHERE identity_key LIKE %s", $duplicate ), ARRAY_A );
+		foreach ( $rows as $row ) {
+			$canonical = $channel . ':' . substr( $row['identity_key'], strlen( $channel . ':' . $channel . ':' ) );
+			$exists = $wpdb->get_var( $wpdb->prepare( "SELECT entity_id FROM $entities WHERE identity_key=%s", $canonical ) );
+			if ( ! $exists ) $wpdb->update( $entities, array( 'identity_key' => $canonical, 'display_name' => $canonical ), array( 'entity_id' => $row['entity_id'] ) );
+		}
+	}
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '9' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '10' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '9', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '10', false );
 	}
 	if ( ! wp_next_scheduled( 'ptc_wallet_release_expired_reservations' ) ) wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', 'ptc_wallet_release_expired_reservations' );
 }

@@ -251,6 +251,7 @@ final class PTC_Chat_App_Wallet {
 
 	public function render_admin_page() {
 		if ( ! current_user_can( 'manage_options' ) ) wp_die( esc_html__( 'You are not allowed to manage wallets.', 'chat-app-wallet' ) );
+		list( $adjustment_notice, $adjustment_error ) = $this->handle_adjustment_forms();
 		$search = sanitize_text_field( wp_unslash( $_GET['wallet_search'] ?? '' ) );
 		$identity_result = $this->suite_identities();
 		$operations_error = is_wp_error( $identity_result ) ? $identity_result : null;
@@ -265,9 +266,17 @@ final class PTC_Chat_App_Wallet {
 		?>
 		<div class="wrap"><h1><?php esc_html_e( 'Chat App Wallet', 'chat-app-wallet' ); ?></h1>
 		<p><?php esc_html_e( 'Wallet support, identity access, usage and refunds. A revoke stops future Suite access; it does not erase ledger history.', 'chat-app-wallet' ); ?></p>
+		<?php if ( $adjustment_notice ) : ?><div class="notice notice-success"><p><?php echo esc_html( $adjustment_notice ); ?></p></div><?php endif; ?>
+		<?php if ( $adjustment_error ) : ?><div class="notice notice-error"><p><?php echo esc_html( $adjustment_error ); ?></p></div><?php endif; ?>
 		<?php if ( $operations_error ) : ?><div class="notice notice-error"><p><?php echo esc_html( 'Identity data is unavailable: ' . $operations_error->get_error_code() . '. Check PTC_WALLET_OPERATIONS_URL and PTC_WALLET_OPERATIONS_TOKEN in wp-config.php, then confirm the matching Supabase Edge Function secret.' ); ?></p></div><?php endif; ?>
 		<?php if ( isset( $_GET['wallet_notice'] ) ) : ?><div class="notice notice-<?php echo 'revoked' === $_GET['wallet_notice'] ? 'success' : 'error'; ?>"><p><?php echo esc_html( 'revoked' === $_GET['wallet_notice'] ? 'Consent and access were revoked.' : 'The requested wallet operation could not be completed.' ); ?></p></div><?php endif; ?>
 		<div style="display:flex;gap:24px;margin:16px 0"><div><strong><?php echo esc_html( count( $identities ) ); ?></strong><br>known identities</div><div><strong><?php echo esc_html( $linked ); ?></strong><br>with owned Wallet profile</div><div><strong><?php echo esc_html( max( 0, count( $identities ) - $linked ) ); ?></strong><br>without available funding</div></div>
+		<h2><?php esc_html_e( 'Operator credit adjustment', 'chat-app-wallet' ); ?></h2>
+		<?php $pending_adjustment = get_transient( 'ptc_wallet_adjustment_' . get_current_user_id() ); if ( is_array( $pending_adjustment ) ) : ?>
+		<form method="post"><p><?php wp_nonce_field( 'ptc_wallet_adjustment_verify' ); ?><label for="totp_code">Authenticator code</label> <input id="totp_code" name="totp_code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required> <button class="button button-primary" name="ptc_wallet_adjustment_verify" value="1">Approve and record adjustment</button></p></form>
+		<?php else : ?>
+		<form method="post"><table class="form-table"><tr><th><label for="wallet_id">Wallet</label></th><td><select id="wallet_id" name="wallet_id" required><option value="">Select a wallet</option><?php foreach ( $wallets as $row ) : if ( ! empty( $row['wallet_id'] ) ) : ?><option value="<?php echo esc_attr( $row['wallet_id'] ); ?>"><?php echo esc_html( $row['display_name'] . ' — ' . $row['balance'] . ' ' . $row['currency'] ); ?></option><?php endif; endforeach; ?></select></td></tr><tr><th><label for="adjustment_kind">Operation</label></th><td><select id="adjustment_kind" name="adjustment_kind"><option value="grant">Add credits</option><option value="adjustment">Remove allocated credits</option></select></td></tr><tr><th><label for="amount">Credits</label></th><td><input id="amount" name="amount" inputmode="decimal" required></td></tr><tr><th><label for="reason">Reason</label></th><td><input id="reason" name="reason" maxlength="191" class="regular-text" required></td></tr></table><?php wp_nonce_field( 'ptc_wallet_adjustment_request' ); ?><button class="button button-primary" name="ptc_wallet_adjustment_request" value="1">Request 2FA approval</button></form>
+		<?php endif; ?>
 		<form method="get" style="margin:16px 0"><input type="hidden" name="page" value="chat-app-wallet"><label for="wallet_search">Search wallets / identities </label><input id="wallet_search" name="wallet_search" value="<?php echo esc_attr( $search ); ?>" placeholder="number, channel, app, status, activity date"><button class="button">Search</button></form>
 		<table class="widefat striped"><thead><tr><th>Identity</th><th>App</th><th>Status</th><th>Wallet balance</th><th>Last activity</th><th>Actions</th></tr></thead><tbody>
 		<?php foreach ( $visible as $identity ) : $key = $this->identity_key( $identity ); $wallet = $wallets[ $key ] ?? null; ?>
@@ -292,6 +301,52 @@ final class PTC_Chat_App_Wallet {
 		return 200 === wp_remote_retrieve_response_code( $response ) && is_array( $data ) && ! empty( $data['ok'] ) ? $data : new WP_Error( 'wallet_operations_request_failed' );
 	}
 
+	private function two_factor_request( $body ) {
+		$url = defined( 'PTC_WALLET_2FA_URL' ) ? esc_url_raw( PTC_WALLET_2FA_URL ) : '';
+		$token = defined( 'PTC_WALLET_2FA_TOKEN' ) ? trim( PTC_WALLET_2FA_TOKEN ) : '';
+		if ( ! $url || ! $token ) return new WP_Error( 'wallet_2fa_not_configured' );
+		$response = wp_remote_post( $url, array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'Accept' => 'application/json' ), 'body' => wp_json_encode( $body ) ) );
+		if ( is_wp_error( $response ) ) return new WP_Error( 'wallet_2fa_unavailable' );
+		$data = json_decode( wp_remote_retrieve_body( $response ), true );
+		return wp_remote_retrieve_response_code( $response ) >= 200 && wp_remote_retrieve_response_code( $response ) < 300 && is_array( $data ) && ! empty( $data['ok'] ) ? $data : new WP_Error( 'wallet_2fa_rejected', sanitize_text_field( $data['error'] ?? 'wallet_2fa_rejected' ) );
+	}
+
+	private function apply_operator_adjustment( $pending ) {
+		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$wpdb->query( 'START TRANSACTION' );
+		$wallet = $wpdb->get_row( $wpdb->prepare( "SELECT wallet_id FROM $wallets WHERE wallet_id=%s FOR UPDATE", $pending['walletId'] ), ARRAY_A );
+		if ( ! $wallet ) { $wpdb->query( 'ROLLBACK' ); return new WP_Error( 'wallet_not_found' ); }
+		$balance = (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet['wallet_id'] ) );
+		if ( $balance + (float) $pending['credits'] < 0 ) { $wpdb->query( 'ROLLBACK' ); return new WP_Error( 'wallet_adjustment_exceeds_available_credit' ); }
+		$inserted = $wpdb->insert( $ledger, array( 'ledger_id' => wp_generate_uuid4(), 'wallet_id' => $wallet['wallet_id'], 'event_type' => (float) $pending['credits'] > 0 ? 'grant' : 'adjustment', 'credits' => $pending['credits'], 'reference_id' => $pending['changeId'], 'reason' => $pending['reason'], 'actor' => $pending['actor'], 'created_at' => current_time( 'mysql', true ) ) );
+		if ( ! $inserted ) { $wpdb->query( 'ROLLBACK' ); return new WP_Error( 'wallet_adjustment_store_failed' ); }
+		$wpdb->query( 'COMMIT' ); return true;
+	}
+
+	private function handle_adjustment_forms() {
+		if ( ! current_user_can( 'manage_options' ) ) return array( null, null );
+		$user = wp_get_current_user(); $key = 'ptc_wallet_adjustment_' . $user->ID;
+		if ( isset( $_POST['ptc_wallet_adjustment_request'] ) ) {
+			check_admin_referer( 'ptc_wallet_adjustment_request' );
+			$wallet_id = sanitize_text_field( wp_unslash( $_POST['wallet_id'] ?? '' ) ); $amount = (string) wp_unslash( $_POST['amount'] ?? '' ); $kind = sanitize_key( $_POST['adjustment_kind'] ?? '' ); $reason = sanitize_text_field( wp_unslash( $_POST['reason'] ?? '' ) );
+			if ( ! preg_match( '/^\d+(?:\.\d{1,6})?$/', $amount ) || (float) $amount <= 0 || ! in_array( $kind, array( 'grant', 'adjustment' ), true ) || ! $reason || ! preg_match( '/^[0-9a-f-]{36}$/i', $wallet_id ) ) return array( null, __( 'Enter a positive amount, a reason, and a valid wallet.', 'chat-app-wallet' ) );
+			$credits = 'adjustment' === $kind ? -(float) $amount : (float) $amount; $change_id = wp_generate_uuid4();
+			$pending = array( 'changeId' => $change_id, 'walletId' => $wallet_id, 'credits' => number_format( $credits, 6, '.', '' ), 'reason' => $reason, 'actor' => $user->user_login ); $json = wp_json_encode( $pending ); $digest = hash( 'sha256', $json );
+			$challenge = $this->two_factor_request( array( 'event' => 'registry_change.challenge.create', 'wordpressUserId' => (string) $user->ID, 'changeId' => $change_id, 'action' => 'wallet.adjustment', 'changeDigest' => $digest, 'target' => array( 'walletId' => $wallet_id ) ) );
+			if ( is_wp_error( $challenge ) ) return array( null, $challenge->get_error_message() );
+			$pending['changeDigest'] = $digest; $pending['challengeId'] = $challenge['challengeId']; set_transient( $key, $pending, 2 * MINUTE_IN_SECONDS ); return array( __( 'Enter your authenticator code to approve this exact credit adjustment.', 'chat-app-wallet' ), null );
+		}
+		if ( isset( $_POST['ptc_wallet_adjustment_verify'] ) ) {
+			check_admin_referer( 'ptc_wallet_adjustment_verify' ); $pending = get_transient( $key ); $code = sanitize_text_field( wp_unslash( $_POST['totp_code'] ?? '' ) );
+			if ( ! is_array( $pending ) || ! preg_match( '/^\d{6}$/', $code ) ) return array( null, __( 'This adjustment approval expired. Start again.', 'chat-app-wallet' ) );
+			$approval = $this->two_factor_request( array( 'event' => 'registry_change.challenge.verify', 'challengeId' => $pending['challengeId'], 'code' => $code ) );
+			if ( is_wp_error( $approval ) ) return array( null, $approval->get_error_message() );
+			$consumed = $this->two_factor_request( array( 'event' => 'wallet_adjustment.consume', 'changeId' => $pending['changeId'], 'action' => 'wallet.adjustment', 'changeDigest' => $pending['changeDigest'], 'target' => array( 'walletId' => $pending['walletId'] ), 'approvalToken' => $approval['approvalToken'] ) );
+			if ( is_wp_error( $consumed ) ) return array( null, $consumed->get_error_message() ); $result = $this->apply_operator_adjustment( $pending ); if ( is_wp_error( $result ) ) return array( null, $result->get_error_message() ); delete_transient( $key ); return array( __( 'Wallet credit adjustment recorded.', 'chat-app-wallet' ), null );
+		}
+		return array( null, null );
+	}
+
 	private function suite_identities() {
 		$result = $this->operations_request( array( 'action' => 'identities.list' ) );
 		return is_wp_error( $result ) ? $result : (array) ( $result['identities'] ?? array() );
@@ -300,7 +355,7 @@ final class PTC_Chat_App_Wallet {
 	private function wallets_by_identity() {
 		global $wpdb;
 		$entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
-		$rows = $wpdb->get_results( "SELECT e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id GROUP BY e.entity_id, e.display_name, w.currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results( "SELECT w.wallet_id, e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id GROUP BY w.wallet_id, e.entity_id, e.display_name, w.currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$result = array(); foreach ( $rows as $row ) $result[ $row['display_name'] ] = $row; return $result;
 	}
 
@@ -336,7 +391,8 @@ function ptc_chat_app_wallet_install_schema() {
 	dbDelta( "CREATE TABLE $wallets ( wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, channel varchar(16) NOT NULL, currency char(3) NOT NULL, timezone varchar(64) NOT NULL DEFAULT 'Africa/Johannesburg', status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, PRIMARY KEY (wallet_id), UNIQUE KEY entity_channel_currency (entity_id, channel, currency) ) $charset;" );
 	$timezone_column = $wpdb->get_var( "SHOW COLUMNS FROM $wallets LIKE 'timezone'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	if ( ! $timezone_column ) $wpdb->query( "ALTER TABLE $wallets ADD COLUMN timezone varchar(64) NOT NULL DEFAULT 'Africa/Johannesburg'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-	dbDelta( "CREATE TABLE $ledger ( ledger_id char(36) NOT NULL, wallet_id char(36) NOT NULL, event_type varchar(32) NOT NULL, credits decimal(18,6) NOT NULL, reference_id varchar(191) NULL, reason varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (ledger_id), KEY wallet_created (wallet_id, created_at) ) $charset;" );
+		dbDelta( "CREATE TABLE $ledger ( ledger_id char(36) NOT NULL, wallet_id char(36) NOT NULL, event_type varchar(32) NOT NULL, credits decimal(18,6) NOT NULL, reference_id varchar(191) NULL, reason varchar(191) NULL, actor varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (ledger_id), KEY wallet_created (wallet_id, created_at) ) $charset;" );
+		if ( ! $wpdb->get_var( "SHOW COLUMNS FROM $ledger LIKE 'actor'" ) ) $wpdb->query( "ALTER TABLE $ledger ADD COLUMN actor varchar(191) NULL" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	dbDelta( "CREATE TABLE $authorizations ( authorization_id char(36) NOT NULL, wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, app_id varchar(64) NOT NULL, channel varchar(16) NOT NULL, meter varchar(64) NOT NULL, idempotency_key varchar(191) NOT NULL, reserved_credits decimal(18,6) NOT NULL, state varchar(16) NOT NULL, expires_at datetime NOT NULL, signature char(64) NOT NULL, claims longtext NULL, created_at datetime NOT NULL, PRIMARY KEY (authorization_id), UNIQUE KEY app_idempotency (app_id, idempotency_key), KEY wallet_state (wallet_id, state) ) $charset;" );
 	$grants = $wpdb->prefix . 'ptc_wallet_access_grants';
 	dbDelta( "CREATE TABLE $grants ( grant_id char(36) NOT NULL, wallet_id char(36) NOT NULL, payer_owner_entity_id char(36) NOT NULL, identity_key varchar(191) NOT NULL, app_id varchar(64) NOT NULL DEFAULT '*', channel varchar(16) NOT NULL DEFAULT '*', spending_limit decimal(18,6) NULL, priority int NOT NULL DEFAULT 100, status varchar(16) NOT NULL DEFAULT 'pending', audit_actor varchar(191) NOT NULL, created_at datetime NOT NULL, expires_at datetime NULL, accepted_at datetime NULL, revoked_at datetime NULL, PRIMARY KEY (grant_id), KEY eligible_identity (identity_key,status,priority) ) $charset;" );
@@ -348,9 +404,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '8' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '9' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '8', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '9', false );
 	}
 	if ( ! wp_next_scheduled( 'ptc_wallet_release_expired_reservations' ) ) wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', 'ptc_wallet_release_expired_reservations' );
 }

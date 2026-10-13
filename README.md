@@ -94,8 +94,9 @@ Wallet maintains independent Telegram and WhatsApp defaults for USD per credit
 and credits required. A message override is channel-specific and must be above
 the active channel default. Raising a default supersedes lower/equal active
 overrides while retaining their audit history. The Rate Card UI reads only
-billable definitions from the active Message Center release in Supabase through
-the protected `wallet-operations` `catalog.billable` action. Every rate change
+eligible definitions from the active Message Center release in Supabase through
+the protected `wallet-operations` `catalog.rate_card` action. Internal Registry,
+Wallet, Suite, and Share groups are excluded from the commercial picker. Every rate change
 requires a fresh Registry-authority TOTP approval bound to the exact change.
 
 ## Owned and shared Wallets

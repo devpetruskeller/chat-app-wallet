@@ -30,8 +30,11 @@ final class PTC_Chat_App_Wallet {
 	/** Public provider endpoint; PayPal authenticity is verified inside the callback. */
 	public function register_rest_routes() {
 		register_rest_route( 'chat-app-wallet/v1', '/identity-provision', array( 'methods' => 'POST', 'callback' => array( $this, 'provision_identity_endpoint' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/identity-lifecycle', array( 'methods' => 'POST', 'callback' => array( $this, 'identity_lifecycle_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/overview', array( 'methods' => 'POST', 'callback' => array( $this, 'overview_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/activity', array( 'methods' => 'POST', 'callback' => array( $this, 'activity_endpoint' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/invite', array( 'methods' => 'POST', 'callback' => array( $this, 'invite_endpoint' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/referral-bind', array( 'methods' => 'POST', 'callback' => array( $this, 'referral_bind_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/topup', array( 'methods' => 'POST', 'callback' => array( $this, 'topup_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/authorization-outcome', array( 'methods' => 'POST', 'callback' => array( $this, 'authorization_outcome_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/paypal/webhook', array(
@@ -82,6 +85,53 @@ final class PTC_Chat_App_Wallet {
 		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'activity_summary' => $summary ? implode( "\n", $summary ) : 'No wallet activity yet.', 'activity_count' => (string) count( $rows ) ) ), 200 );
 	}
 
+	/** Wallet creates the opaque referral code; SB Coms only turns it into a channel link. */
+	public function invite_endpoint( WP_REST_Request $request ) {
+		$identity_request = $this->validated_identity_request( $request );
+		if ( is_wp_error( $identity_request ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $identity_request->get_error_code() ), 401 );
+		list( $channel, $identity ) = $identity_request;
+		$campaign = $this->referral_campaign( $channel, $identity );
+		if ( is_wp_error( $campaign ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $campaign->get_error_code() ), 503 );
+		$token = bin2hex( random_bytes( 16 ) );
+		global $wpdb; $offers = $wpdb->prefix . 'ptc_wallet_referral_offers';
+		if ( ! $wpdb->insert( $offers, array( 'offer_id' => wp_generate_uuid4(), 'campaign_id' => $campaign['campaign_id'], 'token_hash' => hash( 'sha256', $token ), 'status' => 'active', 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'referral_offer_store_failed' ), 503 );
+		return new WP_REST_Response( array( 'ok' => true, 'variables' => array_merge( $this->referral_progress_variables( $campaign ), array( 'referralToken' => $token ) ) ), 200 );
+	}
+
+	/** A new channel identity can bind one valid offer before it begins onboarding. */
+	public function referral_bind_endpoint( WP_REST_Request $request ) {
+		$expected = defined( 'PTC_WALLET_REFERRAL_TOKEN' ) ? trim( PTC_WALLET_REFERRAL_TOKEN ) : '';
+		$actual = preg_replace( '/^Bearer\s+/i', '', (string) $request->get_header( 'authorization' ) );
+		if ( strlen( $expected ) < 32 || ! hash_equals( $expected, $actual ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'unauthorized' ), 401 );
+		$body = $request->get_json_params(); $channel = sanitize_key( $body['channel'] ?? '' ); $token = sanitize_text_field( $body['token'] ?? '' ); $identity = sanitize_text_field( $body['identity'] ?? '' );
+		if ( ! in_array( $channel, array( 'telegram', 'whatsapp' ), true ) || ! preg_match( '/^[a-f0-9]{32}$/', $token ) || 0 !== strpos( $identity, $channel . ':' ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_referral_bind' ), 422 );
+		$identity = $this->canonical_identity( $channel, $identity ); global $wpdb; $offers = $wpdb->prefix . 'ptc_wallet_referral_offers'; $campaigns = $wpdb->prefix . 'ptc_wallet_referral_campaigns'; $referrals = $wpdb->prefix . 'ptc_wallet_referrals';
+		$offer = $wpdb->get_row( $wpdb->prepare( "SELECT o.offer_id,o.campaign_id,c.inviter_identity_key,c.status,c.target_count FROM $offers o INNER JOIN $campaigns c ON c.campaign_id=o.campaign_id WHERE o.token_hash=%s AND o.status='active'", hash( 'sha256', $token ) ), ARRAY_A );
+		if ( ! $offer || 'active' !== $offer['status'] || $offer['inviter_identity_key'] === $identity ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'referral_offer_unavailable' ), 422 );
+		$existing = $wpdb->get_row( $wpdb->prepare( "SELECT campaign_id FROM $referrals WHERE referred_identity_key=%s", $identity ), ARRAY_A );
+		if ( $existing ) return new WP_REST_Response( array( 'ok' => true, 'alreadyBound' => true, 'sameCampaign' => $existing['campaign_id'] === $offer['campaign_id'] ), 200 );
+		$created = $wpdb->insert( $referrals, array( 'referral_id' => wp_generate_uuid4(), 'campaign_id' => $offer['campaign_id'], 'referred_identity_key' => $identity, 'status' => 'pending', 'created_at' => current_time( 'mysql', true ) ) );
+		return $created ? new WP_REST_Response( array( 'ok' => true, 'bound' => true ), 200 ) : new WP_REST_Response( array( 'ok' => false, 'error' => 'referral_bind_store_failed' ), 503 );
+	}
+
+	private function referral_campaign( $channel, $identity ) {
+		global $wpdb; $campaigns = $wpdb->prefix . 'ptc_wallet_referral_campaigns';
+		$campaign = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $campaigns WHERE inviter_identity_key=%s AND channel=%s AND status='active' ORDER BY created_at DESC LIMIT 1", $identity, $channel ), ARRAY_A );
+		if ( $campaign ) return $campaign;
+		$total = defined( 'PTC_WALLET_REFERRAL_CAMPAIGN_CREDITS' ) ? (float) PTC_WALLET_REFERRAL_CAMPAIGN_CREDITS : 0.001;
+		$micro = (int) round( $total * 1000000 ); if ( $micro < 5 ) return new WP_Error( 'referral_campaign_not_configured' );
+		$campaign = array( 'campaign_id' => wp_generate_uuid4(), 'inviter_identity_key' => $identity, 'channel' => $channel, 'target_count' => 5, 'grant_microcredits' => $micro, 'status' => 'active', 'created_at' => current_time( 'mysql', true ) );
+		return $wpdb->insert( $campaigns, $campaign ) ? $campaign : new WP_Error( 'referral_campaign_store_failed' );
+	}
+
+	private function referral_progress_variables( $campaign ) {
+		global $wpdb; $referrals = $wpdb->prefix . 'ptc_wallet_referrals'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $referrals WHERE campaign_id=%s AND status='granted'", $campaign['campaign_id'] ) );
+		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s", $campaign['inviter_identity_key'], $campaign['channel'] ) );
+		$balance = $wallet_id ? (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet_id ) ) : 0;
+		return array( 'completedInviteCount' => (string) $count, 'completedInviteTarget' => (string) $campaign['target_count'], 'creditBalance' => number_format( $balance, 6, '.', '' ), 'creditUnit' => 'CRD' );
+	}
+
 	/** Creates a Sandbox order only for an operator-configured package. */
 	public function topup_endpoint( WP_REST_Request $request ) {
 		$identity_request = $this->validated_identity_request( $request );
@@ -116,6 +166,89 @@ final class PTC_Chat_App_Wallet {
 		$body = $request->get_json_params();
 		$result = $this->provision_owned_wallet( sanitize_key( $body['channel'] ?? '' ), sanitize_text_field( $body['identity'] ?? '' ) );
 		return is_wp_error( $result ) ? new WP_REST_Response( array( 'ok' => false, 'error' => $result->get_error_code() ), 422 ) : new WP_REST_Response( array( 'ok' => true, 'ownedWalletProfile' => $result ), 200 );
+	}
+
+	/**
+	 * Signed Suite lifecycle boundary. Events are deliberately minimal: Wallet
+	 * neither receives nor reconstructs Suite profile, email, mobile or TOTP data.
+	 */
+	public function identity_lifecycle_endpoint( WP_REST_Request $request ) {
+		$secret = defined( 'PTC_WALLET_IDENTITY_LIFECYCLE_SIGNING_SECRET' ) ? trim( PTC_WALLET_IDENTITY_LIFECYCLE_SIGNING_SECRET ) : '';
+		$timestamp = (string) $request->get_header( 'x-postoo-lifecycle-timestamp' );
+		$provided = (string) $request->get_header( 'x-postoo-lifecycle-signature' );
+		$raw = $request->get_body(); $when = strtotime( $timestamp );
+		$expected = $secret && $timestamp ? hash_hmac( 'sha256', $timestamp . '.' . $raw, $secret ) : '';
+		if ( strlen( $secret ) < 32 || ! $when || abs( time() - $when ) > 300 || ! $provided || ! hash_equals( $expected, $provided ) ) {
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_lifecycle_signature' ), 401 );
+		}
+		$body = json_decode( $raw, true );
+		$event_id = sanitize_text_field( $body['eventId'] ?? '' );
+		$event_type = sanitize_key( $body['eventType'] ?? '' );
+		$identity = sanitize_text_field( $body['identity'] ?? '' );
+		$occurred_at = sanitize_text_field( $body['occurredAt'] ?? '' );
+		if ( ! preg_match( '/^[0-9a-f-]{36}$/i', $event_id ) || ! in_array( $event_type, array( 'verified', 'withdrawn', 'revoked' ), true ) || ! $occurred_at || ! preg_match( '/^(telegram|whatsapp):.+$/', $identity, $matches ) ) {
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_lifecycle_event' ), 422 );
+		}
+		$channel = $matches[1]; $identity = $this->canonical_identity( $channel, $identity );
+		global $wpdb; $events = $wpdb->prefix . 'ptc_wallet_identity_events';
+		if ( $wpdb->get_var( $wpdb->prepare( "SELECT 1 FROM $events WHERE event_id=%s", $event_id ) ) ) return new WP_REST_Response( array( 'ok' => true, 'duplicate' => true ), 200 );
+		$wpdb->query( 'START TRANSACTION' );
+		try {
+			if ( 'verified' === $event_type ) {
+				$result = $this->provision_owned_wallet( $channel, $identity );
+				if ( is_wp_error( $result ) ) throw new Exception( $result->get_error_code() );
+				$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->prefix}ptc_wallet_wallets w INNER JOIN {$wpdb->prefix}ptc_wallet_entities e ON e.entity_id=w.entity_id SET w.status='active' WHERE e.identity_key=%s AND w.channel=%s", $identity, $channel ) );
+				$notification = $this->grant_completed_referral( $identity );
+			} else {
+				$this->hold_identity_wallets( $identity, $event_type );
+			}
+			$stored = $wpdb->insert( $events, array( 'event_id' => $event_id, 'identity_key' => $identity, 'event_type' => $event_type, 'occurred_at' => gmdate( 'Y-m-d H:i:s', strtotime( $occurred_at ) ), 'received_at' => current_time( 'mysql', true ) ) );
+			if ( ! $stored ) throw new Exception( 'lifecycle_event_store_failed' );
+			$wpdb->query( 'COMMIT' );
+		} catch ( Exception $error ) {
+			$wpdb->query( 'ROLLBACK' );
+			return new WP_REST_Response( array( 'ok' => false, 'error' => 'lifecycle_apply_failed' ), 503 );
+		}
+		return new WP_REST_Response( array( 'ok' => true, 'duplicate' => false, 'notification' => $notification ?? null ), 200 );
+	}
+
+	/** Credits are integer microcredits; the five grants always sum exactly to the campaign amount. */
+	private function grant_completed_referral( $referred_identity ) {
+		global $wpdb; $referrals = $wpdb->prefix . 'ptc_wallet_referrals'; $campaigns = $wpdb->prefix . 'ptc_wallet_referral_campaigns'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$referral = $wpdb->get_row( $wpdb->prepare( "SELECT r.*,c.inviter_identity_key,c.channel,c.target_count,c.grant_microcredits,c.status AS campaign_status FROM $referrals r INNER JOIN $campaigns c ON c.campaign_id=r.campaign_id WHERE r.referred_identity_key=%s FOR UPDATE", $referred_identity ), ARRAY_A );
+		if ( ! $referral || 'pending' !== $referral['status'] || 'active' !== $referral['campaign_status'] ) return null;
+		$completed = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $referrals WHERE campaign_id=%s AND status='granted'", $referral['campaign_id'] ) );
+		$position = $completed + 1; if ( $position > (int) $referral['target_count'] ) return null;
+		$target = (int) $referral['target_count']; $total = (int) $referral['grant_microcredits'];
+		$micro = (int) floor( $position * $total / $target ) - (int) floor( ( $position - 1 ) * $total / $target );
+		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $referral['inviter_identity_key'], $referral['channel'] ) );
+		if ( ! $wallet_id || $micro <= 0 ) return null;
+		$grant_id = wp_generate_uuid4();
+		if ( ! $wpdb->insert( $ledger, array( 'ledger_id' => $grant_id, 'wallet_id' => $wallet_id, 'event_type' => 'referral_grant', 'credits' => number_format( $micro / 1000000, 6, '.', '' ), 'reference_id' => $referral['referral_id'], 'reason' => 'verified_referral', 'actor' => 'wallet_referral', 'created_at' => current_time( 'mysql', true ) ) ) ) throw new Exception( 'referral_grant_store_failed' );
+		if ( 1 !== $wpdb->update( $referrals, array( 'status' => 'granted', 'grant_ledger_id' => $grant_id, 'granted_at' => current_time( 'mysql', true ) ), array( 'referral_id' => $referral['referral_id'], 'status' => 'pending' ) ) ) throw new Exception( 'referral_grant_state_failed' );
+		if ( $position === $target ) $wpdb->update( $campaigns, array( 'status' => 'completed', 'completed_at' => current_time( 'mysql', true ) ), array( 'campaign_id' => $referral['campaign_id'], 'status' => 'active' ) );
+		$balance = (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet_id ) );
+		return array( 'recipientIdentity' => $referral['inviter_identity_key'], 'messageName' => 'WALLET_INVITE_SUCCESS', 'variables' => array( 'referralDisplayName' => 'A new referral', 'creditGrant' => number_format( $micro / 1000000, 6, '.', '' ), 'creditBalance' => number_format( $balance, 6, '.', '' ), 'creditUnit' => 'CRD', 'completedInviteCount' => (string) $position, 'completedInviteTarget' => (string) $target ) );
+	}
+
+	/** Hold owned balances and release only reservations that never reached SB Coms acceptance. */
+	private function hold_identity_wallets( $identity, $reason ) {
+		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $authorizations = $wpdb->prefix . 'ptc_wallet_authorizations'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $grants = $wpdb->prefix . 'ptc_wallet_access_grants';
+		$owned = $wpdb->get_col( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s", $identity ) );
+		foreach ( $owned as $wallet_id ) {
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT authorization_id,reserved_credits FROM $authorizations WHERE wallet_id=%s AND state='reserved'", $wallet_id ), ARRAY_A );
+			foreach ( $rows as $row ) {
+				if ( 1 === $wpdb->update( $authorizations, array( 'state' => 'release' ), array( 'authorization_id' => $row['authorization_id'], 'state' => 'reserved' ) ) ) {
+					$wpdb->insert( $ledger, array( 'ledger_id' => wp_generate_uuid4(), 'wallet_id' => $wallet_id, 'event_type' => 'release', 'credits' => $row['reserved_credits'], 'reference_id' => $row['authorization_id'], 'reason' => 'identity_' . $reason, 'created_at' => current_time( 'mysql', true ) ) );
+				}
+			}
+		}
+		$wpdb->query( $wpdb->prepare( "UPDATE $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id SET w.status='held' WHERE e.identity_key=%s", $identity ) );
+		$wpdb->query( $wpdb->prepare( "UPDATE $grants SET status='revoked', revoked_at=UTC_TIMESTAMP() WHERE identity_key=%s AND status IN ('pending','active')", $identity ) );
+		$campaigns = $wpdb->prefix . 'ptc_wallet_referral_campaigns'; $offers = $wpdb->prefix . 'ptc_wallet_referral_offers'; $referrals = $wpdb->prefix . 'ptc_wallet_referrals';
+		$wpdb->query( $wpdb->prepare( "UPDATE $campaigns SET status='cancelled', cancelled_at=UTC_TIMESTAMP() WHERE inviter_identity_key=%s AND status='active'", $identity ) );
+		$wpdb->query( $wpdb->prepare( "UPDATE $offers o INNER JOIN $campaigns c ON c.campaign_id=o.campaign_id SET o.status='cancelled', cancelled_at=UTC_TIMESTAMP() WHERE c.inviter_identity_key=%s AND o.status='active'", $identity ) );
+		$wpdb->query( $wpdb->prepare( "UPDATE $referrals SET status='cancelled', cancelled_at=UTC_TIMESTAMP() WHERE referred_identity_key=%s AND status='pending'", $identity ) );
 	}
 
 	public function provision_owned_wallet( $channel, $identity ) {
@@ -442,6 +575,9 @@ function ptc_chat_app_wallet_install_schema() {
 	$authorizations = $wpdb->prefix . 'ptc_wallet_authorizations';
 	$receipts = $wpdb->prefix . 'ptc_wallet_provider_receipts';
 	$rates = $wpdb->prefix . 'ptc_wallet_rate_cards';
+	$campaigns = $wpdb->prefix . 'ptc_wallet_referral_campaigns';
+	$offers = $wpdb->prefix . 'ptc_wallet_referral_offers';
+	$referrals = $wpdb->prefix . 'ptc_wallet_referrals';
 	dbDelta( "CREATE TABLE $entities ( entity_id char(36) NOT NULL, entity_type varchar(32) NOT NULL, display_name varchar(191) NOT NULL, identity_key varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (entity_id), UNIQUE KEY identity_key (identity_key) ) $charset;" );
 	// dbDelta does not reliably add a newly indexed column to an existing
 	// plugin table. Upgrade pre-Wallet identity tables explicitly and safely.
@@ -462,6 +598,11 @@ function ptc_chat_app_wallet_install_schema() {
 		if ( ! $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM $grants LIKE %s", $column ) ) ) $wpdb->query( "ALTER TABLE $grants ADD COLUMN $definition" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	}
 	dbDelta( "CREATE TABLE $receipts ( provider varchar(32) NOT NULL, provider_event_id varchar(191) NOT NULL, event_type varchar(96) NOT NULL, payload longtext NOT NULL, received_at datetime NOT NULL, PRIMARY KEY (provider, provider_event_id) ) $charset;" );
+	$identity_events = $wpdb->prefix . 'ptc_wallet_identity_events';
+	dbDelta( "CREATE TABLE $identity_events ( event_id char(36) NOT NULL, identity_key varchar(191) NOT NULL, event_type varchar(16) NOT NULL, occurred_at datetime NOT NULL, received_at datetime NOT NULL, PRIMARY KEY (event_id), KEY identity_received (identity_key, received_at) ) $charset;" );
+	dbDelta( "CREATE TABLE $campaigns ( campaign_id char(36) NOT NULL, inviter_identity_key varchar(191) NOT NULL, channel varchar(16) NOT NULL, target_count int NOT NULL, grant_microcredits bigint NOT NULL, status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, completed_at datetime NULL, cancelled_at datetime NULL, PRIMARY KEY (campaign_id), KEY inviter_active (inviter_identity_key,channel,status) ) $charset;" );
+	dbDelta( "CREATE TABLE $offers ( offer_id char(36) NOT NULL, campaign_id char(36) NOT NULL, token_hash char(64) NOT NULL, status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, cancelled_at datetime NULL, PRIMARY KEY (offer_id), UNIQUE KEY token_hash (token_hash), KEY campaign_status (campaign_id,status) ) $charset;" );
+	dbDelta( "CREATE TABLE $referrals ( referral_id char(36) NOT NULL, campaign_id char(36) NOT NULL, referred_identity_key varchar(191) NOT NULL, status varchar(16) NOT NULL DEFAULT 'pending', grant_ledger_id char(36) NULL, created_at datetime NOT NULL, granted_at datetime NULL, cancelled_at datetime NULL, PRIMARY KEY (referral_id), UNIQUE KEY referred_identity (referred_identity_key), KEY campaign_status (campaign_id,status) ) $charset;" );
 	dbDelta( "CREATE TABLE $rates ( rate_card_id char(36) NOT NULL, channel varchar(16) NOT NULL, scope varchar(32) NOT NULL, message_group varchar(96) NULL, message_name varchar(128) NULL, billing_meter varchar(96) NULL, usd_per_credit decimal(18,6) NULL, credits_required decimal(18,6) NOT NULL, status varchar(16) NOT NULL DEFAULT 'active', reason varchar(191) NOT NULL, actor varchar(191) NOT NULL, change_id char(36) NOT NULL, created_at datetime NOT NULL, superseded_at datetime NULL, PRIMARY KEY (rate_card_id), KEY active_channel (channel,scope,status), KEY active_message (channel,message_group,message_name,status) ) $charset;" );
 	// Earlier SB Coms payloads could contain an already-prefixed sender address.
 	// Repair only unambiguous duplicate prefixes; never merge a second entity.
@@ -477,9 +618,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '11' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '13' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '11', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '13', false );
 	}
 	if ( ! wp_next_scheduled( 'ptc_wallet_release_expired_reservations' ) ) wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', 'ptc_wallet_release_expired_reservations' );
 }

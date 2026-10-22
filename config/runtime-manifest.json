@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "appId": "chat-app-wallet",
+  "constants": {
+    "PTC_WALLET_AUTHORIZATION_SIGNING_SECRET": { "type": "secret", "required": true, "purpose": "Signs one-use Wallet billing authorizations verified by SB Coms" },
+    "PTC_WALLET_OVERVIEW_TOKEN": { "type": "secret", "required": true, "purpose": "Authenticates the restricted SB Coms Wallet presentation boundary" },
+    "PTC_WALLET_IDENTITY_LIFECYCLE_SIGNING_SECRET": { "type": "secret", "required": true, "purpose": "Verifies signed verified, withdrawn, and revoked identity lifecycle events" },
+    "PTC_WALLET_REFERRAL_TOKEN": { "type": "secret", "required": true, "purpose": "Authenticates the restricted referral attribution boundary from SB Coms" },
+    "PTC_WALLET_OPERATIONS_URL": { "type": "url", "required": false, "purpose": "Wallet support operations Edge Function endpoint" },
+    "PTC_WALLET_OPERATIONS_TOKEN": { "type": "secret", "required": false, "purpose": "Authenticates Wallet support operations requests" },
+    "PTC_WALLET_2FA_URL": { "type": "url", "required": false, "purpose": "Registry 2FA approval endpoint for operator Wallet changes" },
+    "PTC_WALLET_2FA_TOKEN": { "type": "secret", "required": false, "purpose": "Authenticates Registry 2FA approval requests" },
+    "PTC_WALLET_IDENTITY_PROVISION_TOKEN": { "type": "secret", "required": false, "purpose": "Legacy restricted identity-provisioning boundary token" },
+    "PTC_WALLET_PAYPAL_CLIENT_ID": { "type": "secret", "required": false, "purpose": "PayPal adapter client identifier when checkout is enabled" },
+    "PTC_WALLET_PAYPAL_CLIENT_SECRET": { "type": "secret", "required": false, "purpose": "PayPal adapter client secret when checkout is enabled" },
+    "PTC_WALLET_PAYPAL_WEBHOOK_ID": { "type": "identifier", "required": false, "purpose": "PayPal webhook identifier when checkout is enabled" },
+    "PTC_WALLET_YOCO_SECRET_KEY": { "type": "secret", "required": false, "purpose": "Yoco adapter secret when checkout is enabled" },
+    "PTC_WALLET_YOCO_WEBHOOK_SECRET": { "type": "secret", "required": false, "purpose": "Verifies Yoco provider webhooks when checkout is enabled" }
+  }
+}

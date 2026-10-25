@@ -198,6 +198,30 @@ the protected `wallet-operations` `catalog.rate_card` action. Internal Registry,
 Wallet, Suite, and Share groups are excluded from the commercial picker. Every rate change
 requires a fresh Registry-authority TOTP approval bound to the exact change.
 
+### Message cost and WordPress operation
+
+The effective cost for a billable catalog message is resolved in this order:
+
+1. A **Message ignore** rule makes the selected channel/group/message free: `0.000000 CRD`.
+2. Otherwise, a **Message override** supplies the selected message's cost. It must be greater than the channel default.
+3. Otherwise, Wallet uses that channel's **default credits per message**.
+
+Defaults are separate for Telegram and WhatsApp. The fallback is `1.000000 CRD`
+until an operator approves a channel default. A zero-cost message still receives
+a short-lived Wallet authorization so SB Coms can verify the normal send
+bindings, but it creates no debit, reservation, release, or shared-wallet-limit
+usage. A message definition that is already non-billable remains non-billable;
+it does not need a Wallet authorization or a Message ignore rule.
+
+In WordPress, open **Tools → Chat App Wallet**. Use **Credit adjustment** to
+grant or remove an individual Wallet's credits. Use **Channel defaults** to set
+the USD-per-credit and default credits-per-message for Telegram or WhatsApp.
+Use **Rate card** to select an eligible Message Center group and message, then
+either set a higher **Message override** or select **Message ignore** to make it
+free. Each submission creates a short-lived challenge; enter the current
+authenticator code to approve that exact change. The active rate-card table
+shows the current rules and their reason.
+
 ## Owned and shared Wallets
 
 Suite onboarding never creates, selects, links or funds a Wallet. When a

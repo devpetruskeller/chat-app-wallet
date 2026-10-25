@@ -194,8 +194,10 @@ shows the active channel default credits per message beside the editor. Raising
 a default supersedes lower/equal active overrides while retaining their audit
 history. The Rate Card UI reads only
 eligible definitions from the active Message Center release in Supabase through
-the protected `wallet-operations` `catalog.rate_card` action. Internal Registry,
-Wallet, Suite, and Share groups are excluded from the commercial picker. Every rate change
+the protected `wallet-operations` `catalog.rate_card` action. Message Center
+supplies definitions and presentation only; it does not mark a message as
+billable or set its price. Internal Registry, Wallet, Suite, and Share groups
+are excluded from the commercial picker. Every rate change
 requires a fresh Registry-authority TOTP approval bound to the exact change.
 
 ### Message cost and WordPress operation

@@ -187,8 +187,8 @@ referrals (`0.000600` each in this example).
 ### Channel rate card
 
 Wallet maintains independent Telegram and WhatsApp defaults for USD per credit
-and credits required. A message override is channel-specific and must be above
-the active channel default. A message ignore is channel-specific and resolves
+and credits required. A message override is channel-specific and sets a
+different positive cost from the active channel default. A message ignore is channel-specific and resolves
 an otherwise billable active catalog message to zero credits. The Rate Card UI
 shows the active channel default credits per message beside the editor. Raising
 a default supersedes lower/equal active overrides while retaining their audit
@@ -203,7 +203,7 @@ requires a fresh Registry-authority TOTP approval bound to the exact change.
 The effective cost for a billable catalog message is resolved in this order:
 
 1. A **Message ignore** rule makes the selected channel/group/message free: `0.000000 CRD`.
-2. Otherwise, a **Message override** supplies the selected message's cost. It must be greater than the channel default.
+2. Otherwise, a **Message override** supplies the selected message's positive cost.
 3. Otherwise, Wallet uses that channel's **default credits per message**.
 
 Defaults are separate for Telegram and WhatsApp. The fallback is `1.000000 CRD`

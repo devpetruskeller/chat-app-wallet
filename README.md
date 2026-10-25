@@ -188,8 +188,11 @@ referrals (`0.000600` each in this example).
 
 Wallet maintains independent Telegram and WhatsApp defaults for USD per credit
 and credits required. A message override is channel-specific and must be above
-the active channel default. Raising a default supersedes lower/equal active
-overrides while retaining their audit history. The Rate Card UI reads only
+the active channel default. A message ignore is channel-specific and resolves
+an otherwise billable active catalog message to zero credits. The Rate Card UI
+shows the active channel default credits per message beside the editor. Raising
+a default supersedes lower/equal active overrides while retaining their audit
+history. The Rate Card UI reads only
 eligible definitions from the active Message Center release in Supabase through
 the protected `wallet-operations` `catalog.rate_card` action. Internal Registry,
 Wallet, Suite, and Share groups are excluded from the commercial picker. Every rate change

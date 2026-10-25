@@ -135,7 +135,7 @@ funding is actually needed.
   that link.
 
 An access-sharing invitation remains pending until its recipient accepts it.
-The owner may grant only Wallet-defined app/channel eligibility and spending
+The owner may grant only Wallet-defined channel eligibility and spending
 limits, may revoke the access later, and cannot delegate Wallet ownership or
 permission to share onward.
 
@@ -282,14 +282,16 @@ and retains processed event IDs for at least 90 days.
 
 Wallet may grant an identity access to a **shared Wallet** owned by an approved
 customer account, household, team or other commercial entity. Wallet owns every
-shared-Wallet grant, revocation, scope, app/channel eligibility, sponsorship
-priority and spending limit. A current Workspace Owner may request a
+shared-Wallet grant, revocation, channel eligibility, sponsorship priority and
+spending limit. A current Workspace Owner may request a
 Wallet-managed access-share flow; Wallet validates the Owner role and creates
 the pending grant only after the Owner confirms its Wallet-defined terms. An
 administrator, worker, or ordinary user cannot start that flow. Chat apps
 never select a payer or administer either Wallet type.
 
-Owned and shared Wallets may have separate channel balances:
+Owned and shared Wallets may have separate channel balances. Each channel
+Wallet is usable by every Chat App; app IDs are retained only on individual
+authorization and communication records for audit and replay protection:
 
 ```text
 Owned or shared Wallet
@@ -470,9 +472,9 @@ price/balance/payer, or choose an Owner-only definition.
 | `WALLET_ADD_CREDITS` | The customer selects the top-up route. | `checkoutUrl` | Add credits securely here:<br>{{checkoutUrl}} |
 | `WALLET_ACTIVITY` | The customer explicitly requests Wallet activity. It is never sent as a normal chat-menu item. | `activitySummary`, `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Recent activity:<br>{{activitySummary}} |
 | `WALLET_SHARE_START` | A current Workspace Owner selects Wallet access sharing. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
-| `WALLET_SHARE_CONFIRM` | Wallet has resolved the proposed recipient and asks the Owner to confirm the pending grant. | `recipientDisplayName`, `eligibleAppScope`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Apps: {{eligibleAppScope}}<br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
-| `WALLET_SHARE_PENDING` | The Owner has confirmed and the recipient must accept the grant. | `recipientDisplayName`, `eligibleAppScope`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Apps: {{eligibleAppScope}}<br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
-| `WALLET_SHARE_RECEIVED` | The recipient has accepted the grant; Wallet notifies the Owner and/or recipient using the appropriate approved copy. | `counterpartyDisplayName`, `eligibleAppScope`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Apps: {{eligibleAppScope}}<br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
+| `WALLET_SHARE_CONFIRM` | Wallet has resolved the proposed recipient and asks the Owner to confirm the pending grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
+| `WALLET_SHARE_PENDING` | The Owner has confirmed and the recipient must accept the grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
+| `WALLET_SHARE_RECEIVED` | The recipient has accepted the grant; Wallet notifies the Owner and/or recipient using the appropriate approved copy. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
 | `WALLET_ACCESS_DENIED` | An administrator, worker, ordinary user, or otherwise ineligible identity requests Owner-only Wallet sharing. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. Only the current Workspace Owner can share wallet access. |
 | `WALLET_INVITE_FOR_CREDIT` | Wallet begins or resumes the referral recovery route. It promises promotional credits, never completion of a particular business action. | `completedInviteCount`, `completedInviteTarget`, `creditBalance`, `creditUnit` | Invite {{completedInviteTarget}} new verified people to earn promotional credits.<br><br>Your wallet balance is {{creditBalance}} {{creditUnit}}.<br>Verified invites: {{completedInviteCount}}/{{completedInviteTarget}}.<br><br>Reply 1 to receive your share link. |
 | `WALLET_INVITE_INSTRUCTION` | Wallet explains that only a new identity completing email verification, consent, mobile confirmation, and TOTP counts, and that the customer will receive progress updates. | `completedInviteCount`, `completedInviteTarget` | Share your personal invite with friends and family. A referral counts only after a new person completes email verification, consent, mobile confirmation, and TOTP verification.<br><br>Verified invites: {{completedInviteCount}}/{{completedInviteTarget}}. |

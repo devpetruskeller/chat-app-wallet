@@ -70,7 +70,8 @@ final class PTC_Chat_App_Wallet {
 		try { $as_of = ( new DateTimeImmutable( 'now', new DateTimeZone( 'UTC' ) ) )->setTimezone( new DateTimeZone( $timezone ) )->format( 'Y-m-d H:i T' ); } catch ( Exception $error ) { $as_of = gmdate( 'Y-m-d H:i' ) . ' UTC'; }
 		$balance = $wallet_id ? (float) $wpdb->get_var( $wpdb->prepare( "SELECT COALESCE(SUM(credits),0) FROM $ledger WHERE wallet_id=%s", $wallet_id ) ) : 0.0;
 		$shared = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $grants WHERE identity_key=%s AND status='active'", $identity ) );
-		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'as_of_display' => $as_of, 'owned_credit_display' => number_format_i18n( $balance, 3 ) . ' CRD', 'owned_wallet_label' => 'Your Wallet', 'owned_wallet_status' => 'Active', 'return_app_label' => 'Return to app', 'shared_access_count' => (string) (int) $shared, 'shared_access_summary' => (int) $shared ? 'Shared access available.' : 'No shared wallet access.' ) ), 200 );
+		$available_credit_display = number_format_i18n( $balance, 3 ) . ' CRD';
+		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'as_of_display' => $as_of, 'available_credit_display' => $available_credit_display, 'owned_credit_display' => $available_credit_display, 'owned_wallet_label' => 'Your Wallet', 'owned_wallet_status' => 'Active', 'return_app_label' => 'Return to app', 'shared_access_count' => (string) (int) $shared, 'shared_access_summary' => (int) $shared ? 'Shared access available.' : 'No shared wallet access.' ) ), 200 );
 	}
 
 	/** Statement data stays Wallet-owned; SB Coms only receives renderable facts. */

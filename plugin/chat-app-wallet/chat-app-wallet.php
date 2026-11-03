@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.2.1
+ * Version: 0.2.2
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -33,8 +33,7 @@ final class PTC_Chat_App_Wallet {
 		register_rest_route( 'chat-app-wallet/v1', '/identity-lifecycle', array( 'methods' => 'POST', 'callback' => array( $this, 'identity_lifecycle_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/overview', array( 'methods' => 'POST', 'callback' => array( $this, 'overview_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/activity', array( 'methods' => 'POST', 'callback' => array( $this, 'activity_endpoint' ), 'permission_callback' => '__return_true' ) );
-		register_rest_route( 'chat-app-wallet/v1', '/invite', array( 'methods' => 'POST', 'callback' => array( $this, 'invite_endpoint' ), 'permission_callback' => '__return_true' ) );
-		register_rest_route( 'chat-app-wallet/v1', '/referral-bind', array( 'methods' => 'POST', 'callback' => array( $this, 'referral_bind_endpoint' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/promo-settlement', array( 'methods' => 'POST', 'callback' => array( $this, 'promo_settlement_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/topup', array( 'methods' => 'POST', 'callback' => array( $this, 'topup_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/authorization-outcome', array( 'methods' => 'POST', 'callback' => array( $this, 'authorization_outcome_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/paypal/webhook', array(
@@ -42,6 +41,41 @@ final class PTC_Chat_App_Wallet {
 			'callback' => array( $this, 'handle_paypal_webhook' ),
 			'permission_callback' => '__return_true',
 		) );
+	}
+
+	/**
+	 * The sole Promotions boundary. Wallet receives an earned reward only; it
+	 * never receives campaign rules, referral tokens, proof, or message state.
+	 */
+	public function promo_settlement_endpoint( WP_REST_Request $request ) {
+		$secret = defined( 'PTC_WALLET_PROMO_SETTLEMENT_SIGNING_SECRET' ) ? trim( PTC_WALLET_PROMO_SETTLEMENT_SIGNING_SECRET ) : '';
+		$timestamp = (string) $request->get_header( 'x-postoo-settlement-timestamp' );
+		$provided = preg_replace( '/^(?:v1=|sha256=)/', '', (string) $request->get_header( 'x-postoo-settlement-signature' ) );
+		$raw = $request->get_body();
+		if ( strlen( $secret ) < 32 || ! ctype_digit( $timestamp ) || abs( time() - (int) $timestamp ) > 300 || ! $provided || ! hash_equals( hash_hmac( 'sha256', $timestamp . '.' . $raw, $secret ), $provided ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_promo_settlement_signature' ), 401 );
+		$body = json_decode( $raw, true );
+		$settlement_id = sanitize_text_field( $body['settlementId'] ?? '' );
+		$campaign_id = sanitize_text_field( $body['campaignId'] ?? '' );
+		$identity = sanitize_text_field( $body['recipientIdentity'] ?? '' );
+		$microcredits = filter_var( $body['microcredits'] ?? null, FILTER_VALIDATE_INT, array( 'options' => array( 'min_range' => 1 ) ) );
+		if ( ! is_array( $body ) || ! preg_match( '/^[0-9a-f-]{36}$/i', $settlement_id ) || ! preg_match( '/^[0-9a-f-]{36}$/i', $campaign_id ) || false === $microcredits || ! preg_match( '/^(telegram|whatsapp):.+$/', $identity, $matches ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_promo_settlement' ), 422 );
+		$channel = $matches[1]; $identity = $this->canonical_identity( $channel, $identity );
+		global $wpdb; $settlements = $wpdb->prefix . 'ptc_wallet_promo_settlements'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$existing = $wpdb->get_row( $wpdb->prepare( "SELECT settlement_id,ledger_id,status FROM $settlements WHERE settlement_id=%s", $settlement_id ), ARRAY_A );
+		if ( $existing ) return new WP_REST_Response( array( 'ok' => true, 'duplicate' => true, 'settlementId' => $existing['settlement_id'], 'receiptId' => $existing['ledger_id'], 'outcome' => $existing['status'] ), 200 );
+		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ) );
+		if ( ! $wallet_id ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'recipient_wallet_not_active' ), 422 );
+		$ledger_id = wp_generate_uuid4(); $credits = number_format( ( (int) $microcredits ) / 1000000, 6, '.', '' );
+		$wpdb->query( 'START TRANSACTION' );
+		try {
+			if ( ! $wpdb->insert( $settlements, array( 'settlement_id' => $settlement_id, 'campaign_id' => $campaign_id, 'recipient_identity' => $identity, 'wallet_id' => $wallet_id, 'microcredits' => (int) $microcredits, 'ledger_id' => $ledger_id, 'status' => 'settled', 'created_at' => current_time( 'mysql', true ) ) ) ) throw new Exception( 'promo_settlement_store_failed' );
+			if ( ! $wpdb->insert( $ledger, array( 'ledger_id' => $ledger_id, 'wallet_id' => $wallet_id, 'event_type' => 'promo_settlement', 'credits' => $credits, 'reference_id' => $settlement_id, 'reason' => 'promo_campaign:' . $campaign_id, 'actor' => 'promo', 'created_at' => current_time( 'mysql', true ) ) ) ) throw new Exception( 'promo_settlement_ledger_failed' );
+			$wpdb->query( 'COMMIT' );
+		} catch ( Exception $error ) {
+			$wpdb->query( 'ROLLBACK' );
+			return new WP_REST_Response( array( 'ok' => false, 'error' => $error->getMessage() ), 503 );
+		}
+		return new WP_REST_Response( array( 'ok' => true, 'settlementId' => $settlement_id, 'receiptId' => $ledger_id, 'outcome' => 'settled' ), 202 );
 	}
 
 	/** One restricted identity boundary is used by SB Coms presentation routes. */
@@ -199,7 +233,6 @@ final class PTC_Chat_App_Wallet {
 				$result = $this->provision_owned_wallet( $channel, $identity );
 				if ( is_wp_error( $result ) ) throw new Exception( $result->get_error_code() );
 				$wpdb->query( $wpdb->prepare( "UPDATE {$wpdb->prefix}ptc_wallet_wallets w INNER JOIN {$wpdb->prefix}ptc_wallet_entities e ON e.entity_id=w.entity_id SET w.status='active' WHERE e.identity_key=%s AND w.channel=%s", $identity, $channel ) );
-				$notification = $this->grant_completed_referral( $identity );
 			} else {
 				$this->hold_identity_wallets( $identity, $event_type );
 			}
@@ -210,7 +243,7 @@ final class PTC_Chat_App_Wallet {
 			$wpdb->query( 'ROLLBACK' );
 			return new WP_REST_Response( array( 'ok' => false, 'error' => 'lifecycle_apply_failed' ), 503 );
 		}
-		return new WP_REST_Response( array( 'ok' => true, 'duplicate' => false, 'notification' => $notification ?? null ), 200 );
+		return new WP_REST_Response( array( 'ok' => true, 'duplicate' => false ), 200 );
 	}
 
 	/** Credits are integer microcredits; the five grants always sum exactly to the campaign amount. */
@@ -591,6 +624,7 @@ function ptc_chat_app_wallet_install_schema() {
 	$entities = $wpdb->prefix . 'ptc_wallet_entities';
 	$wallets = $wpdb->prefix . 'ptc_wallet_wallets';
 	$ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+	$promo_settlements = $wpdb->prefix . 'ptc_wallet_promo_settlements';
 	$authorizations = $wpdb->prefix . 'ptc_wallet_authorizations';
 	$receipts = $wpdb->prefix . 'ptc_wallet_provider_receipts';
 	$rates = $wpdb->prefix . 'ptc_wallet_rate_cards';
@@ -607,7 +641,8 @@ function ptc_chat_app_wallet_install_schema() {
 	dbDelta( "CREATE TABLE $wallets ( wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, channel varchar(16) NOT NULL, currency char(3) NOT NULL, timezone varchar(64) NOT NULL DEFAULT 'Africa/Johannesburg', status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, PRIMARY KEY (wallet_id), UNIQUE KEY entity_channel_currency (entity_id, channel, currency) ) $charset;" );
 	$timezone_column = $wpdb->get_var( "SHOW COLUMNS FROM $wallets LIKE 'timezone'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	if ( ! $timezone_column ) $wpdb->query( "ALTER TABLE $wallets ADD COLUMN timezone varchar(64) NOT NULL DEFAULT 'Africa/Johannesburg'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		dbDelta( "CREATE TABLE $ledger ( ledger_id char(36) NOT NULL, wallet_id char(36) NOT NULL, event_type varchar(32) NOT NULL, credits decimal(18,6) NOT NULL, reference_id varchar(191) NULL, reason varchar(191) NULL, actor varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (ledger_id), KEY wallet_created (wallet_id, created_at) ) $charset;" );
+	dbDelta( "CREATE TABLE $ledger ( ledger_id char(36) NOT NULL, wallet_id char(36) NOT NULL, event_type varchar(32) NOT NULL, credits decimal(18,6) NOT NULL, reference_id varchar(191) NULL, reason varchar(191) NULL, actor varchar(191) NULL, created_at datetime NOT NULL, PRIMARY KEY (ledger_id), KEY wallet_created (wallet_id, created_at) ) $charset;" );
+	dbDelta( "CREATE TABLE $promo_settlements ( settlement_id char(36) NOT NULL, campaign_id char(36) NOT NULL, recipient_identity varchar(191) NOT NULL, wallet_id char(36) NOT NULL, microcredits bigint NOT NULL, ledger_id char(36) NOT NULL, status varchar(16) NOT NULL, created_at datetime NOT NULL, PRIMARY KEY (settlement_id), UNIQUE KEY ledger_id (ledger_id), KEY recipient_created (recipient_identity, created_at) ) $charset;" );
 		if ( ! $wpdb->get_var( "SHOW COLUMNS FROM $ledger LIKE 'actor'" ) ) $wpdb->query( "ALTER TABLE $ledger ADD COLUMN actor varchar(191) NULL" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	dbDelta( "CREATE TABLE $authorizations ( authorization_id char(36) NOT NULL, wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, app_id varchar(64) NOT NULL, channel varchar(16) NOT NULL, meter varchar(64) NOT NULL, idempotency_key varchar(191) NOT NULL, reserved_credits decimal(18,6) NOT NULL, state varchar(16) NOT NULL, expires_at datetime NOT NULL, signature char(64) NOT NULL, claims longtext NULL, created_at datetime NOT NULL, PRIMARY KEY (authorization_id), UNIQUE KEY app_idempotency (app_id, idempotency_key), KEY wallet_state (wallet_id, state) ) $charset;" );
 	$grants = $wpdb->prefix . 'ptc_wallet_access_grants';

@@ -6,6 +6,7 @@
     "PTC_WALLET_OVERVIEW_TOKEN": { "type": "secret", "required": true, "purpose": "Authenticates the restricted SB Coms Wallet presentation boundary" },
     "PTC_WALLET_IDENTITY_LIFECYCLE_SIGNING_SECRET": { "type": "secret", "required": true, "purpose": "Verifies signed verified, withdrawn, and revoked identity lifecycle events" },
     "PTC_WALLET_REFERRAL_TOKEN": { "type": "secret", "required": true, "purpose": "Authenticates the restricted referral attribution boundary from SB Coms" },
+    "PTC_WALLET_PROMO_SETTLEMENT_SIGNING_SECRET": { "type": "secret", "required": false, "purpose": "Verifies signed, idempotent reward settlements from the Promotions plugin" },
     "PTC_WALLET_OPERATIONS_URL": { "type": "url", "required": false, "purpose": "Wallet support operations Edge Function endpoint" },
     "PTC_WALLET_OPERATIONS_TOKEN": { "type": "secret", "required": false, "purpose": "Authenticates Wallet support operations requests" },
     "PTC_WALLET_2FA_URL": { "type": "url", "required": false, "purpose": "Registry 2FA approval endpoint for operator Wallet changes" },

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.3.4
+ * Version: 0.3.5
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -23,6 +23,7 @@ final class PTC_Chat_App_Wallet {
 	private function __construct() {
 		add_action( 'admin_menu', array( $this, 'add_admin_page' ) );
 		add_action( 'admin_footer', array( $this, 'restore_pending_rate_tab' ) );
+		add_action( 'admin_init', array( $this, 'remove_legacy_diagnostic_wallet' ) );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		add_action( 'admin_post_ptc_wallet_revoke_access', array( $this, 'handle_revoke_access' ) );
 		add_action( 'ptc_wallet_release_expired_reservations', array( $this, 'release_expired_reservations' ) );
@@ -295,6 +296,24 @@ final class PTC_Chat_App_Wallet {
 		$wallet = $wpdb->get_var( $wpdb->prepare( "SELECT wallet_id FROM $wallets WHERE entity_id = %s AND channel = %s", $entity, $channel ) );
 		if ( ! $wallet ) { $wallet = wp_generate_uuid4(); if ( ! $wpdb->insert( $wallets, array( 'wallet_id' => $wallet, 'entity_id' => $entity, 'channel' => $channel, 'currency' => 'CRD', 'timezone' => self::DEFAULT_TIMEZONE, 'status' => 'active', 'created_at' => current_time( 'mysql', true ) ) ) ) return new WP_Error( 'wallet_profile_store_failed' ); }
 		return array( 'identity' => $identity, 'wallet_reference' => hash( 'sha256', $wallet ) );
+	}
+
+	/** Remove the retired diagnostic profile only when it has no financial or access history. */
+	public function remove_legacy_diagnostic_wallet() {
+		if ( get_option( 'ptc_wallet_diagnostic_wallet_cleanup_done', false ) ) return;
+		global $wpdb; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $authorizations = $wpdb->prefix . 'ptc_wallet_authorizations'; $grants = $wpdb->prefix . 'ptc_wallet_access_grants';
+		$entity = $wpdb->get_var( $wpdb->prepare( "SELECT entity_id FROM $entities WHERE identity_key=%s", 'telegram:diagnostic' ) );
+		if ( ! $entity ) { update_option( 'ptc_wallet_diagnostic_wallet_cleanup_done', '1', false ); return; }
+		$wallet_ids = $wpdb->get_col( $wpdb->prepare( "SELECT wallet_id FROM $wallets WHERE entity_id=%s", $entity ) );
+		foreach ( $wallet_ids as $wallet_id ) {
+			$has_history = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $ledger WHERE wallet_id=%s", $wallet_id ) ) + (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $authorizations WHERE wallet_id=%s", $wallet_id ) ) + (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $grants WHERE wallet_id=%s", $wallet_id ) );
+			if ( $has_history ) return;
+		}
+		$wpdb->query( 'START TRANSACTION' );
+		$deleted_wallets = $wpdb->delete( $wallets, array( 'entity_id' => $entity ) );
+		$deleted_entity = false !== $deleted_wallets && $wpdb->delete( $entities, array( 'entity_id' => $entity ) );
+		if ( false === $deleted_wallets || false === $deleted_entity ) { $wpdb->query( 'ROLLBACK' ); return; }
+		$wpdb->query( 'COMMIT' ); update_option( 'ptc_wallet_diagnostic_wallet_cleanup_done', '1', false );
 	}
 
 	private function canonical_identity( $channel, $identity ) {
@@ -613,7 +632,7 @@ final class PTC_Chat_App_Wallet {
 	private function wallets_by_identity() {
 		global $wpdb;
 		$entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
-		$rows = $wpdb->get_results( "SELECT w.wallet_id, e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id GROUP BY w.wallet_id, e.entity_id, e.display_name, w.currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results( "SELECT w.wallet_id, e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id AND w.status='active' LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id GROUP BY w.wallet_id, e.entity_id, e.display_name, w.currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$result = array(); foreach ( $rows as $row ) $result[ $row['display_name'] ] = $row; return $result;
 	}
 

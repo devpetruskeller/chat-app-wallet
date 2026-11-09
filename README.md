@@ -163,8 +163,10 @@ non-billable; it has no billing meter and does not enter the Wallet
 authorization or settlement path. A Chat App definition cannot use that
 non-billable classification to bypass Wallet policy.
 
-In WordPress, open **Tools → Chat App Wallet**. Use **Credit adjustment** to
-grant or remove an individual Wallet's credits. Use **Channel defaults** to
+In WordPress, open **Tools → Chat App Wallet**. The **Credit adjustment**
+Wallet picker lists only active Wallets; held, revoked, unavailable, and
+retired diagnostic profiles cannot be selected for an adjustment. Use **Credit
+adjustment** to grant or remove an individual active Wallet's credits. Use **Channel defaults** to
 view or change the USD-per-credit and Default CRD per message for Telegram or
 WhatsApp. Use **Rate card** to set only a message-specific CRD override. Its
 USD-per-credit value is taken from the selected channel's Channel defaults,

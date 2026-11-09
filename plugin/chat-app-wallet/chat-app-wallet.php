@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.3.5
+ * Version: 0.3.6
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -470,6 +470,7 @@ final class PTC_Chat_App_Wallet {
 		$pending = get_transient( 'ptc_wallet_rate_' . get_current_user_id() );
 		?>
 		<script>(function(){function init(){document.querySelectorAll('button[name="ptc_wallet_rate_remove_request"]').forEach(function(button){button.textContent='Remove';});var panel=document.querySelector('[data-wallet-panel="rates"]'),scope=document.getElementById('rate_scope'),usd=document.getElementById('usd_per_credit'),defaultCredits=document.getElementById('rate_default_credits');if(panel){panel.querySelector('h2+p').textContent='Set the CRD required for a selected message. The USD per credit and default message cost are managed on the Channel defaults tab.';var costTable=panel.querySelector('h3+table');if(costTable){costTable.querySelectorAll('tr').forEach(function(row){var cells=row.children;if(cells.length>1){cells[1].style.display='none';}});}}if(scope){scope.value='message_override';scope.closest('tr').style.display='none';}if(usd){usd.required=false;usd.removeAttribute('name');usd.closest('tr').style.display='none';}if(defaultCredits)defaultCredits.closest('tr').style.display='none';if(<?php echo wp_json_encode( is_array( $pending ) ); ?>){var tab=document.querySelector('[data-wallet-tab="rates"]');if(tab&&panel){document.querySelectorAll('[data-wallet-tab]').forEach(function(item){item.classList.remove('nav-tab-active');});document.querySelectorAll('[data-wallet-panel]').forEach(function(item){item.style.display='none';});tab.classList.add('nav-tab-active');panel.style.display='block';}}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();</script>
+		<script>(function(){function reload(key,value){var url=new URL(window.location.href);url.searchParams.set('page','chat-app-wallet');url.searchParams.set(key,value);window.location.assign(url.toString());}function init(){var walletSelect=document.getElementById('wallet_id');if(walletSelect){var form=walletSelect.closest('form'),search=document.createElement('p'),label=document.createElement('label'),input=document.createElement('input'),button=document.createElement('button');label.textContent='Find active Wallet ';input.type='search';input.value=<?php echo wp_json_encode( $wallet_picker_search ); ?>;input.placeholder='Telegram ID or WhatsApp number';button.type='button';button.className='button';button.textContent='Search';button.onclick=function(){reload('wallet_picker_search',input.value.trim());};search.append(label,input,button);form.insertBefore(search,form.firstChild);if(!input.value){var hint=document.createElement('p');hint.className='description';hint.textContent='Search before selecting a Wallet. Results are limited to 25 active Wallets.';form.insertBefore(hint,search.nextSibling);}}var identityPanel=document.querySelector('[data-wallet-panel="identities"]'),identitySearch=document.querySelector('input[name="wallet_search"]');if(identitySearch){identitySearch.placeholder='Telegram ID, WhatsApp number, channel, or status';identitySearch.closest('form').addEventListener('submit',function(){var pageInput=this.querySelector('input[name="wallet_page"]');if(!pageInput){pageInput=document.createElement('input');pageInput.type='hidden';pageInput.name='wallet_page';this.appendChild(pageInput);}pageInput.value='1';});}if(identityPanel){var total=<?php echo (int) $identity_total; ?>,page=<?php echo (int) $identity_page; ?>,query=<?php echo wp_json_encode( $search ); ?>,summary=document.createElement('p');summary.className='description';summary.textContent=query?'Showing up to 25 of '+total+' matching identities.':'Search for an identity to view results.';identityPanel.insertBefore(summary,identityPanel.querySelector('table'));if(query&&total>25){var nav=document.createElement('p');if(page>1){var previous=document.createElement('button');previous.type='button';previous.className='button';previous.textContent='Previous';previous.onclick=function(){reload('wallet_page',page-1);};nav.append(previous);}if(page*25<total){var next=document.createElement('button');next.type='button';next.className='button';next.textContent='Next';next.onclick=function(){reload('wallet_page',page+1);};nav.append(next);}identityPanel.insertBefore(nav,identityPanel.querySelector('table'));}}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();</script>
 		<?php
 	}
 
@@ -480,17 +481,18 @@ final class PTC_Chat_App_Wallet {
 		$catalog_error = is_wp_error( $catalog_result ) ? $catalog_result->get_error_code() : null;
 		$active_rate_cards = $this->rate_cards(); $configured_messages = array(); foreach ( $active_rate_cards as $rate ) if ( in_array( $rate['scope'], array( 'message_override', 'message_ignore' ), true ) ) $configured_messages[ $rate['channel'] . '|' . $rate['message_group'] . '|' . $rate['message_name'] ] = true;
 		$rate_catalog = array_values( array_filter( $catalog, function( $entry ) use ( $configured_messages ) { return empty( $configured_messages[ $entry['channel'] . '|' . $entry['group'] . '|' . $entry['name'] ] ); } ) );
-		$search = sanitize_text_field( wp_unslash( $_GET['wallet_search'] ?? '' ) );
-		$identity_result = $this->suite_identities();
+		$search = sanitize_text_field( wp_unslash( $_GET['wallet_search'] ?? '' ) ); $identity_page = max( 1, (int) ( $_GET['wallet_page'] ?? 1 ) ); $wallet_picker_search = sanitize_text_field( wp_unslash( $_GET['wallet_picker_search'] ?? '' ) );
+		$identity_result = '' === $search ? array( 'identities' => array(), 'total' => 0 ) : $this->suite_identities( $search, $identity_page );
 		$operations_error = is_wp_error( $identity_result ) ? $identity_result : null;
-		$identities = $operations_error ? array() : $identity_result;
-		$wallets = $this->wallets_by_identity();
+		$identities = $operations_error ? array() : (array) ( $identity_result['identities'] ?? array() ); $identity_total = $operations_error ? 0 : (int) ( $identity_result['total'] ?? 0 );
+		$wallets = '' === $wallet_picker_search ? array() : $this->wallets_by_identity( $wallet_picker_search );
+		$identity_wallets = $this->wallets_for_identities( $identities );
 		$visible = array_filter( $identities, function( $identity ) use ( $search ) {
 			$haystack = strtolower( implode( ' ', array( $identity['channel'] ?? '', $identity['sender_address'] ?? '', $identity['stage'] ?? '', $identity['updated_at'] ?? '' ) ) );
 			return '' === $search || false !== strpos( $haystack, strtolower( $search ) );
 		} );
 		$linked = 0;
-		foreach ( $identities as $identity ) if ( isset( $wallets[ $this->identity_key( $identity ) ] ) ) $linked++;
+		foreach ( $identities as $identity ) if ( isset( $identity_wallets[ $this->identity_key( $identity ) ] ) ) $linked++;
 		?>
 		<div class="wrap"><h1><?php esc_html_e( 'Chat App Wallet', 'chat-app-wallet' ); ?></h1>
 		<p><?php esc_html_e( 'Wallet support, identity access, usage and refunds. A revoke stops future Suite access; it does not erase ledger history.', 'chat-app-wallet' ); ?></p>
@@ -514,7 +516,7 @@ final class PTC_Chat_App_Wallet {
 		<h3><?php esc_html_e( 'Approved message costs', 'chat-app-wallet' ); ?></h3><table class="widefat striped"><thead><tr><th>Channel</th><th>Scope</th><th>Message</th><th>USD/CRD</th><th>CRD required</th><th>Reason</th><th>Action</th></tr></thead><tbody><?php foreach ( $active_rate_cards as $rate ) : if ( 'channel_default' === $rate['scope'] ) continue; $scope_label = array( 'message_override' => 'Message override', 'message_ignore' => 'Message ignore' )[ $rate['scope'] ] ?? $rate['scope']; ?><tr><td><?php echo esc_html( $rate['channel'] ); ?></td><td><?php echo esc_html( $scope_label ); ?></td><td><?php echo esc_html( $rate['message_group'] . ' / ' . $rate['message_name'] ); ?></td><td><?php echo esc_html( null === $rate['usd_per_credit'] ? '—' : $rate['usd_per_credit'] ); ?></td><td><?php echo esc_html( $rate['credits_required'] ); ?></td><td><?php echo esc_html( $rate['reason'] ); ?></td><td><form method="post"><input type="hidden" name="rate_channel" value="<?php echo esc_attr( $rate['channel'] ); ?>"><input type="hidden" name="rate_scope" value="<?php echo esc_attr( $rate['scope'] ); ?>"><input type="hidden" name="message_group" value="<?php echo esc_attr( $rate['message_group'] ); ?>"><input type="hidden" name="message_name" value="<?php echo esc_attr( $rate['message_name'] ); ?>"><?php wp_nonce_field( 'ptc_wallet_rate_remove_request' ); ?><button class="button" name="ptc_wallet_rate_remove_request" value="1">Remove / change cost</button></form></td></tr><?php endforeach; ?></tbody></table>
 		</div><div class="wallet-tab-panel" data-wallet-panel="identities" style="display:none"><h2><?php esc_html_e( 'Wallet identities', 'chat-app-wallet' ); ?></h2><form method="get" style="margin:16px 0"><input type="hidden" name="page" value="chat-app-wallet"><label for="wallet_search">Search wallets / identities </label><input id="wallet_search" name="wallet_search" value="<?php echo esc_attr( $search ); ?>" placeholder="number, channel, status, activity date"><button class="button">Search</button></form>
 		<table class="widefat striped"><thead><tr><th>Identity</th><th>Status</th><th>Wallet balance</th><th>Last activity</th><th>Actions</th></tr></thead><tbody>
-		<?php foreach ( $visible as $identity ) : $key = $this->identity_key( $identity ); $wallet = $wallets[ $key ] ?? null; ?>
+		<?php foreach ( $visible as $identity ) : $key = $this->identity_key( $identity ); $wallet = $identity_wallets[ $key ] ?? null; ?>
 		<tr><td><?php echo esc_html( $key ); ?></td><td><?php echo esc_html( $identity['stage'] ?? '—' ); ?></td><td><?php echo esc_html( $wallet ? $wallet['balance'] . ' ' . $wallet['currency'] : 'No available funding' ); ?></td><td><?php echo esc_html( $identity['updated_at'] ?? '—' ); ?></td><td><?php if ( 'revoked' !== ( $identity['stage'] ?? '' ) ) : ?><form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return confirm('Revoke consent and access for this identity?');"><input type="hidden" name="action" value="ptc_wallet_revoke_access"><input type="hidden" name="channel" value="<?php echo esc_attr( $identity['channel'] ); ?>"><input type="hidden" name="sender_address" value="<?php echo esc_attr( $identity['sender_address'] ); ?>"><?php wp_nonce_field( 'ptc_wallet_revoke_access' ); ?><input required name="reason" maxlength="500" placeholder="Reason for revocation"><button class="button button-link-delete">Revoke consent &amp; access</button></form><?php else : ?>Revoked<?php endif; ?></td></tr>
 		<?php endforeach; if ( ! $visible ) : ?><tr><td colspan="5">No identities found.</td></tr><?php endif; ?></tbody></table></div><script>document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('[data-wallet-tab]').forEach(function(t){t.onclick=function(e){e.preventDefault();document.querySelectorAll('[data-wallet-tab]').forEach(function(x){x.classList.remove('nav-tab-active');});document.querySelectorAll('[data-wallet-panel]').forEach(function(x){x.style.display='none';});t.classList.add('nav-tab-active');document.querySelector('[data-wallet-panel="'+t.dataset.walletTab+'"]').style.display='block';};});});</script></div>
 		<?php
@@ -619,9 +621,8 @@ final class PTC_Chat_App_Wallet {
 		$pending['changeDigest'] = $digest; $pending['challengeId'] = $challenge['challengeId']; set_transient( $transient, $pending, 2 * MINUTE_IN_SECONDS ); return array( __( 'Enter an authenticator code to approve this exact rate-card change.', 'chat-app-wallet' ), null );
 	}
 
-	private function suite_identities() {
-		$result = $this->operations_request( array( 'action' => 'identities.list' ) );
-		return is_wp_error( $result ) ? $result : (array) ( $result['identities'] ?? array() );
+	private function suite_identities( $query, $page = 1 ) {
+		return $this->operations_request( array( 'action' => 'identities.list', 'query' => $query, 'page' => max( 1, (int) $page ), 'perPage' => 25 ) );
 	}
 
 	private function billable_catalog() {
@@ -629,10 +630,21 @@ final class PTC_Chat_App_Wallet {
 		return is_wp_error( $result ) ? $result : (array) ( $result['definitions'] ?? array() );
 	}
 
-	private function wallets_by_identity() {
+	private function wallets_by_identity( $query ) {
 		global $wpdb;
 		$entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
-		$rows = $wpdb->get_results( "SELECT w.wallet_id, e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id AND w.status='active' LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id GROUP BY w.wallet_id, e.entity_id, e.display_name, w.currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$like = '%' . $wpdb->esc_like( $query ) . '%'; $rows = $wpdb->get_results( $wpdb->prepare( "SELECT w.wallet_id, e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id AND w.status='active' LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id WHERE e.display_name LIKE %s GROUP BY w.wallet_id, e.entity_id, e.display_name, w.currency ORDER BY e.display_name ASC LIMIT 25", $like ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$result = array(); foreach ( $rows as $row ) $result[ $row['display_name'] ] = $row; return $result;
+	}
+
+	private function wallets_for_identities( $identities ) {
+		$keys = array_values( array_unique( array_filter( array_map( array( $this, 'identity_key' ), (array) $identities ) ) ) );
+		if ( ! $keys ) return array();
+		global $wpdb;
+		$entities = $wpdb->prefix . 'ptc_wallet_entities'; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$placeholders = implode( ',', array_fill( 0, count( $keys ), '%s' ) );
+		$sql = "SELECT w.wallet_id, e.display_name, w.currency, COALESCE(SUM(l.credits), 0) AS balance FROM $entities e INNER JOIN $wallets w ON w.entity_id = e.entity_id AND w.status='active' LEFT JOIN $ledger l ON l.wallet_id = w.wallet_id WHERE e.display_name IN ($placeholders) GROUP BY w.wallet_id, e.entity_id, e.display_name, w.currency";
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $keys ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$result = array(); foreach ( $rows as $row ) $result[ $row['display_name'] ] = $row; return $result;
 	}
 

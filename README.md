@@ -175,6 +175,12 @@ for the same message. Each submission creates a short-lived challenge; enter the
 authenticator code to approve that exact change. The active rate-card table
 shows the current rules and their reason.
 
+The **Wallet identities** tab is search-first and returns at most 25 matching
+Supabase onboarding identities per page; it does not load every identity by
+default. The Credit adjustment Wallet picker is also search-first and returns
+at most 25 matching active Wallets from WordPress. Search by a Telegram ID,
+WhatsApp number, channel, or onboarding status before selecting a record.
+
 ## Owned and shared Wallets
 
 Suite onboarding never creates, selects, links or funds a Wallet. When a

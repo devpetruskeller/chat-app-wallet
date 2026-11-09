@@ -184,15 +184,15 @@ zero, each of the five successful referrals grants `0.001000` credits. If the
 balance is `0.002000`, the exact `0.003000` shortfall is granted across five
 referrals (`0.000600` each in this example).
 
-### Channel rate card
+### Message rate card
 
-Wallet maintains independent Telegram and WhatsApp defaults for USD per credit
-and credits required. A message override is channel-specific and sets a
-different positive cost from the active channel default. A message ignore is channel-specific and resolves
-an otherwise billable active catalog message to zero credits. The Rate Card UI
-shows the active channel default credits per message beside the editor. Raising
-a default supersedes lower/equal active overrides while retaining their audit
-history. The Rate Card UI reads only
+Every Telegram and WhatsApp message has a default cost of `0.000000 CRD`.
+Wallet charges credits only when an operator approves a positive, channel- and
+message-specific cost. To change a price later, update that message's rate-card
+entry; no channel-wide message cost needs to be changed. Legacy channel-default
+and message-ignore records remain in the database for audit history, but
+channel defaults no longer affect authorization costs and new ignore rules are
+not created. The Rate Card UI reads only
 eligible definitions from the active Message Center release in Supabase through
 the protected `wallet-operations` `catalog.rate_card` action. Message Center
 supplies definitions and presentation only; it does not mark a message as
@@ -204,23 +204,21 @@ requires a fresh Registry-authority TOTP approval bound to the exact change.
 
 The effective cost for a billable catalog message is resolved in this order:
 
-1. A **Message ignore** rule makes the selected channel/group/message free: `0.000000 CRD`.
-2. Otherwise, a **Message override** supplies the selected message's positive cost.
-3. Otherwise, Wallet uses that channel's **default credits per message**.
+1. An approved **Message cost** entry supplies that selected message's positive cost.
+2. Otherwise, Wallet uses the default: `0.000000 CRD`.
 
-Defaults are separate for Telegram and WhatsApp. The fallback is `1.000000 CRD`
-until an operator approves a channel default. A zero-cost message still receives
+For compatibility, an existing legacy **Message ignore** rule still resolves to
+zero credits. A zero-cost message still receives
 a short-lived Wallet authorization so SB Coms can verify the normal send
 bindings, but it creates no debit, reservation, release, or shared-wallet-limit
 usage. A message definition that is already non-billable remains non-billable;
 it does not need a Wallet authorization or a Message ignore rule.
 
 In WordPress, open **Tools → Chat App Wallet**. Use **Credit adjustment** to
-grant or remove an individual Wallet's credits. Use **Channel defaults** to set
-the USD-per-credit and default credits-per-message for Telegram or WhatsApp.
-Use **Rate card** to select an eligible Message Center group and message, then
-either set a higher **Message override** or select **Message ignore** to make it
-free. Each submission creates a short-lived challenge; enter the current
+grant or remove an individual Wallet's credits. Use **Rate card** to select an
+eligible Message Center group and message, then set that message's USD per
+credit and CRD required. All messages without an approved message-cost entry
+are free. Each submission creates a short-lived challenge; enter the current
 authenticator code to approve that exact change. The active rate-card table
 shows the current rules and their reason.
 

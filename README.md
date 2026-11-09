@@ -46,6 +46,14 @@ values are applied through `ptc-runtime-config`. The initial names are
 signing secret is required for the current authorization service; provider
 credentials are required only when their checkout adapters are enabled.
 
+Wallet and Promotions must use distinct provider applications, webhook
+endpoints, and credentials. Do not copy, include, or load `plugins/promo/.env`
+from Wallet. Supply Wallet-specific `PTC_WALLET_*` values only through the
+administrator-approved `ptc-runtime-config` process after the reviewed Wallet
+manifest is installed. `PTC_WALLET_PAYPAL_BASE_URL` selects PayPal Sandbox or
+Live deliberately; set `PTC_WALLET_YOCO_BASE_URL` only for a non-production
+Yoco endpoint.
+
 Suite lifecycle delivery additionally requires
 `PTC_WALLET_IDENTITY_LIFECYCLE_SIGNING_SECRET`, shared with Supabase as
 `PT_WALLET_IDENTITY_LIFECYCLE_SIGNING_SECRET`. Supabase sends signed lifecycle
@@ -57,6 +65,11 @@ contains a server-managed JSON package list. Each package must have a stable
 `sku`, ISO currency, decimal amount, and credit quantity. This is deliberately
 not a client or chat-app setting: no default conversion rate is inferred and
 the Sandbox checkout adapter refuses an unknown or unconfigured package.
+Each package can optionally restrict its routes with `providers`, for example
+`["paypal","yoco"]`; when omitted, it can be used with either provider. Wallet
+stores the configured amount, currency, and credit quantity before opening a
+provider-hosted checkout, then credits the Wallet only after a verified webhook
+matches that recorded purchase exactly.
 
 The support UI additionally needs `PTC_WALLET_OPERATIONS_URL` (the deployed
 Supabase `wallet-operations` function URL) and the matching
@@ -84,6 +97,13 @@ runtime secret configuration. The listener verifies PayPal's signature using
 the configured client credentials before storing an idempotent receipt. It
 does not grant credits until a checkout order/capture has been bound to a
 Wallet purchase.
+
+For Yoco, configure this webhook listener and subscribe it to
+`payment.succeeded`:
+
+```
+https://api.postoochat.com/wp-json/chat-app-wallet/v1/yoco/webhook
+```
 
 ## Credit model
 

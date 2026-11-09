@@ -14,8 +14,10 @@
     "PTC_WALLET_IDENTITY_PROVISION_TOKEN": { "type": "secret", "required": false, "purpose": "Legacy restricted identity-provisioning boundary token" },
     "PTC_WALLET_PAYPAL_CLIENT_ID": { "type": "secret", "required": false, "purpose": "PayPal adapter client identifier when checkout is enabled" },
     "PTC_WALLET_PAYPAL_CLIENT_SECRET": { "type": "secret", "required": false, "purpose": "PayPal adapter client secret when checkout is enabled" },
+    "PTC_WALLET_PAYPAL_BASE_URL": { "type": "url", "required": false, "purpose": "PayPal API base URL; use Sandbox or Live deliberately" },
     "PTC_WALLET_PAYPAL_WEBHOOK_ID": { "type": "identifier", "required": false, "purpose": "PayPal webhook identifier when checkout is enabled" },
     "PTC_WALLET_YOCO_SECRET_KEY": { "type": "secret", "required": false, "purpose": "Yoco adapter secret when checkout is enabled" },
+    "PTC_WALLET_YOCO_BASE_URL": { "type": "url", "required": false, "purpose": "Yoco API base URL; defaults to the production endpoint" },
     "PTC_WALLET_YOCO_WEBHOOK_SECRET": { "type": "secret", "required": false, "purpose": "Verifies Yoco provider webhooks when checkout is enabled" }
   }
 }

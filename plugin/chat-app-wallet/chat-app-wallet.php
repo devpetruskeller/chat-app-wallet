@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.3.7
+ * Version: 0.4.0
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -43,6 +43,8 @@ final class PTC_Chat_App_Wallet {
 			'callback' => array( $this, 'handle_paypal_webhook' ),
 			'permission_callback' => '__return_true',
 		) );
+		register_rest_route( 'chat-app-wallet/v1', '/paypal/return', array( 'methods' => 'GET', 'callback' => array( $this, 'handle_paypal_return' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/yoco/webhook', array( 'methods' => 'POST', 'callback' => array( $this, 'handle_yoco_webhook' ), 'permission_callback' => '__return_true' ) );
 	}
 
 	/**
@@ -169,16 +171,42 @@ final class PTC_Chat_App_Wallet {
 		return array( 'completedInviteCount' => (string) $count, 'completedInviteTarget' => (string) $campaign['target_count'], 'creditBalance' => number_format( $balance, 6, '.', '' ), 'creditUnit' => 'CRD' );
 	}
 
-	/** Creates a Sandbox order only for an operator-configured package. */
+	/** Creates a provider checkout for an operator-configured, fixed-price package. */
 	public function topup_endpoint( WP_REST_Request $request ) {
 		$identity_request = $this->validated_identity_request( $request );
 		if ( is_wp_error( $identity_request ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $identity_request->get_error_code() ), 401 );
 		$packages = json_decode( defined( 'PTC_WALLET_PAYPAL_TOPUP_PACKAGES' ) ? PTC_WALLET_PAYPAL_TOPUP_PACKAGES : '[]', true );
-		$body = $request->get_json_params(); $sku = sanitize_key( $body['package'] ?? '' );
+		$body = $request->get_json_params(); $sku = sanitize_key( $body['package'] ?? '' ); $provider = sanitize_key( $body['provider'] ?? 'paypal' );
+		if ( ! in_array( $provider, array( 'paypal', 'yoco' ), true ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'topup_provider_invalid' ), 422 );
 		$package = is_array( $packages ) ? array_values( array_filter( $packages, function( $item ) use ( $sku ) { return is_array( $item ) && $sku && $sku === sanitize_key( $item['sku'] ?? '' ); } ) ) : array();
 		if ( ! $package ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'topup_package_not_configured' ), 422 );
-		// Checkout capture binding is intentionally separate: a return URL is not payment proof.
-		return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_checkout_not_enabled' ), 503 );
+		$package = $package[0]; $currency = strtoupper( sanitize_text_field( $package['currency'] ?? '' ) ); $amount = (string) ( $package['amount'] ?? '' ); $credits = (float) ( $package['credits'] ?? 0 );
+		if ( ! preg_match( '/^[A-Z]{3}$/', $currency ) || ! preg_match( '/^\d+(?:\.\d{1,2})?$/', $amount ) || $credits <= 0 || ( isset( $package['providers'] ) && ! in_array( $provider, (array) $package['providers'], true ) ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'topup_package_invalid' ), 422 );
+		list( $channel, $identity ) = $identity_request; global $wpdb; $wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM {$wpdb->prefix}ptc_wallet_wallets w JOIN {$wpdb->prefix}ptc_wallet_entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ) );
+		if ( ! $wallet_id ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'wallet_not_active' ), 422 );
+		$purchase = array( 'purchase_id' => wp_generate_uuid4(), 'wallet_id' => $wallet_id, 'provider' => $provider, 'sku' => $sku, 'currency' => $currency, 'amount_minor' => (int) round( (float) $amount * 100 ), 'credits' => number_format( $credits, 6, '.', '' ), 'status' => 'created', 'created_at' => current_time( 'mysql', true ) );
+		if ( ! $wpdb->insert( $wpdb->prefix . 'ptc_wallet_purchases', $purchase ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'topup_purchase_store_failed' ), 503 );
+		$result = 'paypal' === $provider ? $this->create_paypal_checkout( $purchase, $amount ) : $this->create_yoco_checkout( $purchase, $amount );
+		if ( is_wp_error( $result ) ) { $wpdb->update( $wpdb->prefix . 'ptc_wallet_purchases', array( 'status' => 'failed' ), array( 'purchase_id' => $purchase['purchase_id'] ) ); return new WP_REST_Response( array( 'ok' => false, 'error' => $result->get_error_code() ), 503 ); }
+		$wpdb->update( $wpdb->prefix . 'ptc_wallet_purchases', array( 'provider_payment_id' => $result['id'], 'status' => 'pending' ), array( 'purchase_id' => $purchase['purchase_id'] ) );
+		return new WP_REST_Response( array( 'ok' => true, 'provider' => $provider, 'purchaseId' => $purchase['purchase_id'], 'checkoutUrl' => $result['url'] ), 201 );
+	}
+
+	private function create_paypal_checkout( $purchase, $amount ) {
+		$client_id = defined( 'PTC_WALLET_PAYPAL_CLIENT_ID' ) ? trim( PTC_WALLET_PAYPAL_CLIENT_ID ) : ''; $secret = defined( 'PTC_WALLET_PAYPAL_CLIENT_SECRET' ) ? trim( PTC_WALLET_PAYPAL_CLIENT_SECRET ) : '';
+		if ( ! $client_id || ! $secret ) return new WP_Error( 'paypal_not_configured' ); $base = $this->paypal_base_url();
+		$token = wp_remote_post( $base . '/v1/oauth2/token', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Basic ' . base64_encode( $client_id . ':' . $secret ), 'Accept' => 'application/json' ), 'body' => array( 'grant_type' => 'client_credentials' ) ) );
+		$data = is_wp_error( $token ) ? array() : json_decode( wp_remote_retrieve_body( $token ), true ); $access = is_array( $data ) ? (string) ( $data['access_token'] ?? '' ) : ''; if ( ! $access ) return new WP_Error( 'paypal_checkout_unavailable' );
+		$return_url = add_query_arg( 'purchase_id', rawurlencode( $purchase['purchase_id'] ), rest_url( 'chat-app-wallet/v1/paypal/return' ) ); $cancel_url = add_query_arg( 'purchase_id', rawurlencode( $purchase['purchase_id'] ), rest_url( 'chat-app-wallet/v1/paypal/cancel' ) );
+		$order = wp_remote_post( $base . '/v2/checkout/orders', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Bearer ' . $access, 'Content-Type' => 'application/json', 'Prefer' => 'return=representation' ), 'body' => wp_json_encode( array( 'intent' => 'CAPTURE', 'payment_source' => array( 'paypal' => array( 'experience_context' => array( 'return_url' => $return_url, 'cancel_url' => $cancel_url, 'user_action' => 'PAY_NOW' ) ) ), 'purchase_units' => array( array( 'reference_id' => $purchase['purchase_id'], 'custom_id' => $purchase['purchase_id'], 'amount' => array( 'currency_code' => $purchase['currency'], 'value' => number_format( (float) $amount, 2, '.', '' ) ) ) ) ) ) ) );
+		$body = is_wp_error( $order ) ? array() : json_decode( wp_remote_retrieve_body( $order ), true ); $url = ''; foreach ( (array) ( $body['links'] ?? array() ) as $link ) if ( 'approve' === ( $link['rel'] ?? '' ) ) $url = esc_url_raw( $link['href'] ?? '' ); if ( empty( $body['id'] ) || ! $url ) return new WP_Error( 'paypal_checkout_create_failed' ); return array( 'id' => sanitize_text_field( $body['id'] ), 'url' => $url );
+	}
+
+	private function create_yoco_checkout( $purchase, $amount ) {
+		$key = defined( 'PTC_WALLET_YOCO_SECRET_KEY' ) ? trim( PTC_WALLET_YOCO_SECRET_KEY ) : ''; if ( ! $key ) return new WP_Error( 'yoco_not_configured' );
+		$base = defined( 'PTC_WALLET_YOCO_BASE_URL' ) ? rtrim( PTC_WALLET_YOCO_BASE_URL, '/' ) : 'https://payments.yoco.com';
+		$response = wp_remote_post( $base . '/api/checkouts', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Bearer ' . $key, 'Content-Type' => 'application/json' ), 'body' => wp_json_encode( array( 'amount' => $purchase['amount_minor'], 'currency' => $purchase['currency'], 'metadata' => array( 'walletPurchaseId' => $purchase['purchase_id'] ) ) ) ) );
+		$body = is_wp_error( $response ) ? array() : json_decode( wp_remote_retrieve_body( $response ), true ); $url = esc_url_raw( $body['redirectUrl'] ?? $body['checkoutUrl'] ?? '' ); $id = sanitize_text_field( $body['id'] ?? $body['checkoutId'] ?? '' ); if ( ! $id || ! $url ) return new WP_Error( 'yoco_checkout_create_failed' ); return array( 'id' => $id, 'url' => $url );
 	}
 	public function authorization_outcome_endpoint( WP_REST_Request $request ) {
 		$secret = defined( 'PTC_WALLET_AUTHORIZATION_SIGNING_SECRET' ) ? PTC_WALLET_AUTHORIZATION_SIGNING_SECRET : '';
@@ -346,13 +374,44 @@ final class PTC_Chat_App_Wallet {
 		}
 		$inserted = $wpdb->insert( $receipts, array( 'provider' => 'paypal', 'provider_event_id' => $event_id, 'event_type' => sanitize_text_field( (string) ( $event['event_type'] ?? '' ) ), 'payload' => wp_json_encode( $event ), 'received_at' => current_time( 'mysql', true ) ) );
 		if ( ! $inserted ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_receipt_store_failed' ), 503 );
-		// Credit is deliberately not granted here. A later checkout implementation
-		// must first bind a verified PayPal order/capture to a Wallet purchase.
+		if ( 'PAYMENT.CAPTURE.COMPLETED' === ( $event['event_type'] ?? '' ) ) {
+			$resource = is_array( $event['resource'] ?? null ) ? $event['resource'] : array();
+			$purchase_id = sanitize_text_field( $resource['custom_id'] ?? $resource['supplementary_data']['related_ids']['order_id'] ?? '' );
+			$settled = $this->settle_purchase( 'paypal', $purchase_id, sanitize_text_field( $resource['id'] ?? '' ), (int) round( (float) ( $resource['amount']['value'] ?? 0 ) * 100 ), strtoupper( sanitize_text_field( $resource['amount']['currency_code'] ?? '' ) ) );
+			if ( is_wp_error( $settled ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $settled->get_error_code() ), 422 );
+		}
 		return new WP_REST_Response( array( 'ok' => true, 'duplicate' => false ), 200 );
 	}
 
+	public function handle_yoco_webhook( WP_REST_Request $request ) {
+		$raw = $request->get_body(); if ( ! $this->verify_yoco_webhook( $request, $raw ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'yoco_webhook_signature_invalid' ), 401 );
+		$event = json_decode( $raw, true ); $event_id = sanitize_text_field( (string) $request->get_header( 'webhook-id' ) ); if ( ! is_array( $event ) || ! $event_id ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'invalid_yoco_event' ), 422 );
+		global $wpdb; $receipts = $wpdb->prefix . 'ptc_wallet_provider_receipts'; if ( $wpdb->get_var( $wpdb->prepare( "SELECT 1 FROM $receipts WHERE provider=%s AND provider_event_id=%s", 'yoco', $event_id ) ) ) return new WP_REST_Response( array( 'ok' => true, 'duplicate' => true ), 200 );
+		if ( ! $wpdb->insert( $receipts, array( 'provider' => 'yoco', 'provider_event_id' => $event_id, 'event_type' => sanitize_text_field( $event['type'] ?? '' ), 'payload' => wp_json_encode( $event ), 'received_at' => current_time( 'mysql', true ) ) ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'yoco_receipt_store_failed' ), 503 );
+		if ( 'payment.succeeded' === strtolower( (string) ( $event['type'] ?? '' ) ) ) { $data = is_array( $event['data'] ?? null ) ? $event['data'] : array(); $metadata = is_array( $data['metadata'] ?? null ) ? $data['metadata'] : array(); $settled = $this->settle_purchase( 'yoco', sanitize_text_field( $metadata['walletPurchaseId'] ?? '' ), sanitize_text_field( $data['id'] ?? $data['checkoutId'] ?? '' ), absint( $data['amount'] ?? 0 ), strtoupper( sanitize_text_field( $data['currency'] ?? '' ) ) ); if ( is_wp_error( $settled ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $settled->get_error_code() ), 422 ); }
+		return new WP_REST_Response( array( 'ok' => true ), 200 );
+	}
+
+	/** Capture after buyer approval; the PayPal webhook remains the only credit grant. */
+	public function handle_paypal_return( WP_REST_Request $request ) {
+		$purchase_id = sanitize_text_field( $request->get_param( 'purchase_id' ) ); $order_id = sanitize_text_field( $request->get_param( 'token' ) ); if ( ! preg_match( '/^[0-9a-f-]{36}$/i', $purchase_id ) || ! $order_id ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_return_invalid' ), 422 ); global $wpdb; $purchase = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}ptc_wallet_purchases WHERE purchase_id=%s", $purchase_id ), ARRAY_A ); if ( ! $purchase || 'paypal' !== $purchase['provider'] || $purchase['provider_payment_id'] !== $order_id ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_return_mismatch' ), 422 );
+		$client_id = defined( 'PTC_WALLET_PAYPAL_CLIENT_ID' ) ? trim( PTC_WALLET_PAYPAL_CLIENT_ID ) : ''; $secret = defined( 'PTC_WALLET_PAYPAL_CLIENT_SECRET' ) ? trim( PTC_WALLET_PAYPAL_CLIENT_SECRET ) : ''; $token = $client_id && $secret ? wp_remote_post( $this->paypal_base_url() . '/v1/oauth2/token', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Basic ' . base64_encode( $client_id . ':' . $secret ) ), 'body' => array( 'grant_type' => 'client_credentials' ) ) ) : new WP_Error( 'paypal_not_configured' ); $data = is_wp_error( $token ) ? array() : json_decode( wp_remote_retrieve_body( $token ), true ); $access = is_array( $data ) ? (string) ( $data['access_token'] ?? '' ) : ''; if ( ! $access ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_capture_unavailable' ), 503 ); $capture = wp_remote_post( $this->paypal_base_url() . '/v2/checkout/orders/' . rawurlencode( $order_id ) . '/capture', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Bearer ' . $access, 'Content-Type' => 'application/json' ), 'body' => '{}' ) ); if ( is_wp_error( $capture ) || ! in_array( wp_remote_retrieve_response_code( $capture ), array( 200, 201 ), true ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_capture_failed' ), 502 ); return new WP_REST_Response( array( 'ok' => true, 'status' => 'payment_processing' ), 202 );
+	}
+
+	private function settle_purchase( $provider, $purchase_id, $payment_id, $amount_minor, $currency ) {
+		if ( ! $payment_id || $amount_minor < 1 || ! preg_match( '/^[A-Z]{3}$/', $currency ) ) return new WP_Error( 'provider_payment_invalid' ); global $wpdb; $purchases = $wpdb->prefix . 'ptc_wallet_purchases'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $purchase = preg_match( '/^[0-9a-f-]{36}$/i', $purchase_id ) ? $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $purchases WHERE purchase_id=%s", $purchase_id ), ARRAY_A ) : $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $purchases WHERE provider=%s AND provider_payment_id=%s", $provider, $purchase_id ), ARRAY_A );
+		if ( ! $purchase || $purchase['provider'] !== $provider || (int) $purchase['amount_minor'] !== $amount_minor || $purchase['currency'] !== $currency ) return new WP_Error( 'provider_payment_mismatch' ); if ( 'settled' === $purchase['status'] ) return true;
+		$resolved_purchase_id = $purchase['purchase_id']; $wpdb->query( 'START TRANSACTION' ); try { $updated = $wpdb->update( $purchases, array( 'status' => 'settled', 'settled_at' => current_time( 'mysql', true ) ), array( 'purchase_id' => $resolved_purchase_id, 'status' => 'pending' ) ); if ( 1 !== $updated ) throw new Exception( 'provider_payment_not_pending' ); if ( ! $wpdb->insert( $ledger, array( 'ledger_id' => wp_generate_uuid4(), 'wallet_id' => $purchase['wallet_id'], 'event_type' => 'purchase', 'credits' => $purchase['credits'], 'reference_id' => $resolved_purchase_id, 'reason' => $provider . ':' . $payment_id, 'actor' => $provider, 'created_at' => current_time( 'mysql', true ) ) ) ) throw new Exception( 'purchase_ledger_store_failed' ); $wpdb->query( 'COMMIT' ); return true; } catch ( Exception $error ) { $wpdb->query( 'ROLLBACK' ); return new WP_Error( $error->getMessage() ); }
+	}
+
+	private function verify_yoco_webhook( WP_REST_Request $request, $body ) {
+		$secret = defined( 'PTC_WALLET_YOCO_WEBHOOK_SECRET' ) ? preg_replace( '/^whsec_/', '', PTC_WALLET_YOCO_WEBHOOK_SECRET ) : ''; $id = (string) $request->get_header( 'webhook-id' ); $timestamp = (string) $request->get_header( 'webhook-timestamp' ); $header = (string) $request->get_header( 'webhook-signature' ); $key = base64_decode( $secret, true ); if ( ! $id || ! ctype_digit( $timestamp ) || abs( time() - (int) $timestamp ) > 300 || ! $header || false === $key ) return false; $expected = base64_encode( hash_hmac( 'sha256', $id . '.' . $timestamp . '.' . $body, $key, true ) ); return (bool) preg_match( '/v1,' . preg_quote( $expected, '/' ) . '(?:[\s,]|$)/', $header );
+	}
+
+	private function paypal_base_url() { return defined( 'PTC_WALLET_PAYPAL_BASE_URL' ) ? rtrim( PTC_WALLET_PAYPAL_BASE_URL, '/' ) : 'https://api-m.sandbox.paypal.com'; }
+
 	private function verify_paypal_webhook( $request, $event, $client_id, $client_secret, $webhook_id ) {
-		$token_response = wp_remote_post( 'https://api-m.sandbox.paypal.com/v1/oauth2/token', array(
+		$token_response = wp_remote_post( $this->paypal_base_url() . '/v1/oauth2/token', array(
 			'timeout' => 15,
 			'headers' => array( 'Authorization' => 'Basic ' . base64_encode( $client_id . ':' . $client_secret ), 'Accept' => 'application/json' ),
 			'body' => array( 'grant_type' => 'client_credentials' ),
@@ -361,7 +420,7 @@ final class PTC_Chat_App_Wallet {
 		$token = json_decode( wp_remote_retrieve_body( $token_response ), true );
 		$access_token = is_array( $token ) ? (string) ( $token['access_token'] ?? '' ) : '';
 		if ( ! $access_token ) return new WP_Error( 'paypal_token_verification_failed' );
-		$verification = wp_remote_post( 'https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature', array(
+		$verification = wp_remote_post( $this->paypal_base_url() . '/v1/notifications/verify-webhook-signature', array(
 			'timeout' => 15,
 			'headers' => array( 'Authorization' => 'Bearer ' . $access_token, 'Content-Type' => 'application/json' ),
 			'body' => wp_json_encode( array(
@@ -664,6 +723,7 @@ function ptc_chat_app_wallet_install_schema() {
 	$promo_settlements = $wpdb->prefix . 'ptc_wallet_promo_settlements';
 	$authorizations = $wpdb->prefix . 'ptc_wallet_authorizations';
 	$receipts = $wpdb->prefix . 'ptc_wallet_provider_receipts';
+	$purchases = $wpdb->prefix . 'ptc_wallet_purchases';
 	$rates = $wpdb->prefix . 'ptc_wallet_rate_cards';
 	$campaigns = $wpdb->prefix . 'ptc_wallet_referral_campaigns';
 	$offers = $wpdb->prefix . 'ptc_wallet_referral_offers';
@@ -690,6 +750,7 @@ function ptc_chat_app_wallet_install_schema() {
 		if ( ! $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM $grants LIKE %s", $column ) ) ) $wpdb->query( "ALTER TABLE $grants ADD COLUMN $definition" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	}
 	dbDelta( "CREATE TABLE $receipts ( provider varchar(32) NOT NULL, provider_event_id varchar(191) NOT NULL, event_type varchar(96) NOT NULL, payload longtext NOT NULL, received_at datetime NOT NULL, PRIMARY KEY (provider, provider_event_id) ) $charset;" );
+	dbDelta( "CREATE TABLE $purchases ( purchase_id char(36) NOT NULL, wallet_id char(36) NOT NULL, provider varchar(32) NOT NULL, provider_payment_id varchar(191) NULL, sku varchar(96) NOT NULL, currency char(3) NOT NULL, amount_minor bigint NOT NULL, credits decimal(18,6) NOT NULL, status varchar(16) NOT NULL, created_at datetime NOT NULL, settled_at datetime NULL, PRIMARY KEY (purchase_id), UNIQUE KEY provider_payment (provider,provider_payment_id), KEY wallet_status (wallet_id,status) ) $charset;" );
 	$identity_events = $wpdb->prefix . 'ptc_wallet_identity_events';
 	dbDelta( "CREATE TABLE $identity_events ( event_id char(36) NOT NULL, identity_key varchar(191) NOT NULL, event_type varchar(16) NOT NULL, occurred_at datetime NOT NULL, received_at datetime NOT NULL, PRIMARY KEY (event_id), KEY identity_received (identity_key, received_at) ) $charset;" );
 	dbDelta( "CREATE TABLE $campaigns ( campaign_id char(36) NOT NULL, inviter_identity_key varchar(191) NOT NULL, channel varchar(16) NOT NULL, target_count int NOT NULL, grant_microcredits bigint NOT NULL, status varchar(16) NOT NULL DEFAULT 'active', created_at datetime NOT NULL, completed_at datetime NULL, cancelled_at datetime NULL, PRIMARY KEY (campaign_id), KEY inviter_active (inviter_identity_key,channel,status) ) $charset;" );
@@ -710,9 +771,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '14' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '15' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '14', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '15', false );
 	}
 	if ( ! wp_next_scheduled( 'ptc_wallet_release_expired_reservations' ) ) wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', 'ptc_wallet_release_expired_reservations' );
 }

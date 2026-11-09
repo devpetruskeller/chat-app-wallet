@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.3.3
+ * Version: 0.3.4
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -450,7 +450,7 @@ final class PTC_Chat_App_Wallet {
 		if ( ! current_user_can( 'manage_options' ) || 'chat-app-wallet' !== ( $_GET['page'] ?? '' ) ) return;
 		$pending = get_transient( 'ptc_wallet_rate_' . get_current_user_id() );
 		?>
-		<script>document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('button[name="ptc_wallet_rate_remove_request"]').forEach(function(button){button.textContent='Remove';});var panel=document.querySelector('[data-wallet-panel="rates"]'),scope=document.getElementById('rate_scope'),usd=document.getElementById('usd_per_credit'),defaultCredits=document.getElementById('rate_default_credits');if(panel){panel.querySelector('h2+p').textContent='Set the CRD required for a selected message. The USD per credit and default message cost are managed on the Channel defaults tab.';var costTable=panel.querySelector('h3+table');if(costTable){costTable.querySelectorAll('tr').forEach(function(row){var cells=row.children;if(cells.length>1){cells[1].style.display='none';}});}}if(scope){scope.value='message_override';scope.closest('tr').style.display='none';}if(usd){usd.required=false;usd.removeAttribute('name');usd.closest('tr').style.display='none';}if(defaultCredits)defaultCredits.closest('tr').style.display='none';if(<?php echo wp_json_encode( is_array( $pending ) ); ?>){var tab=document.querySelector('[data-wallet-tab="rates"]');if(tab&&panel){document.querySelectorAll('[data-wallet-tab]').forEach(function(item){item.classList.remove('nav-tab-active');});document.querySelectorAll('[data-wallet-panel]').forEach(function(item){item.style.display='none';});tab.classList.add('nav-tab-active');panel.style.display='block';}}});</script>
+		<script>(function(){function init(){document.querySelectorAll('button[name="ptc_wallet_rate_remove_request"]').forEach(function(button){button.textContent='Remove';});var panel=document.querySelector('[data-wallet-panel="rates"]'),scope=document.getElementById('rate_scope'),usd=document.getElementById('usd_per_credit'),defaultCredits=document.getElementById('rate_default_credits');if(panel){panel.querySelector('h2+p').textContent='Set the CRD required for a selected message. The USD per credit and default message cost are managed on the Channel defaults tab.';var costTable=panel.querySelector('h3+table');if(costTable){costTable.querySelectorAll('tr').forEach(function(row){var cells=row.children;if(cells.length>1){cells[1].style.display='none';}});}}if(scope){scope.value='message_override';scope.closest('tr').style.display='none';}if(usd){usd.required=false;usd.removeAttribute('name');usd.closest('tr').style.display='none';}if(defaultCredits)defaultCredits.closest('tr').style.display='none';if(<?php echo wp_json_encode( is_array( $pending ) ); ?>){var tab=document.querySelector('[data-wallet-tab="rates"]');if(tab&&panel){document.querySelectorAll('[data-wallet-tab]').forEach(function(item){item.classList.remove('nav-tab-active');});document.querySelectorAll('[data-wallet-panel]').forEach(function(item){item.style.display='none';});tab.classList.add('nav-tab-active');panel.style.display='block';}}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();</script>
 		<?php
 	}
 

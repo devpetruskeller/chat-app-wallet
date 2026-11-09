@@ -519,3 +519,10 @@ and must verify the ticket without accessing Wallet records.
   require an auditable privileged action.
 - Payment and wallet webhooks must be idempotent, signed, replay-protected,
   and recorded before side effects are applied.
+
+## Wallet administration
+
+The Wallet identities tab is search-first and returns at most 25 matching
+Supabase onboarding identities per page. Each identity with an active Wallet
+has row-level **Add credits** and **Remove credits** controls; both require the
+same auditable two-factor approval as other administrative wallet changes.

@@ -52,14 +52,6 @@ Suite lifecycle delivery additionally requires
 events to the Wallet's `/wp-json/chat-app-wallet/v1/identity-lifecycle` route;
 its `PT_WALLET_IDENTITY_LIFECYCLE_URL` must contain that deployed route.
 
-Referral attribution uses a separate high-entropy boundary secret:
-`PTC_WALLET_REFERRAL_TOKEN` in protected WordPress runtime configuration and
-`PT_WALLET_REFERRAL_TOKEN` in Supabase Edge Function secrets. Supabase uses it
-only to bind an opaque referral token to a new channel identity before
-onboarding; it cannot read, issue, or grant Wallet credits. The optional
-`PTC_WALLET_REFERRAL_CAMPAIGN_CREDITS` value sets the five-invite campaign
-total (default `0.001000` CRD).
-
 PayPal top-up packages are disabled unless `PTC_WALLET_PAYPAL_TOPUP_PACKAGES`
 contains a server-managed JSON package list. Each package must have a stable
 `sku`, ISO currency, decimal amount, and credit quantity. This is deliberately
@@ -117,83 +109,35 @@ customer only when:
    insufficient; or
 2. the customer explicitly requests their balance.
 
-The insufficient-credit path offers only top-up and referral options. A
-balance request may additionally offer Wallet access sharing. This keeps
-commercial prompts out of normal use while leaving a clear recovery route when
-funding is actually needed.
+The insufficient-credit path offers top-up only. A balance request may
+additionally offer Wallet access sharing. This keeps commercial prompts out of
+normal use while leaving a clear recovery route when funding is actually
+needed.
 
-"Share wallet with a user" and "Invite for credits" are different features:
+Wallet access sharing is a Wallet feature:
 
 - **Share wallet with a user** grants a selected person controlled access to
   an existing shared Wallet. It is available only to the current Workspace
   Owner, never to an administrator, worker, or ordinary user. Wallet enforces
   this policy; a Chat App only forwards the reply and must not decide a role,
   payer, spending limit, or Wallet scope.
-- **Invite for credits** gives the customer a personal referral link. It never
-  grants the invited person access to the inviter's Wallet. A reward is earned
-  only when a distinct new person completes PosTooChat verification through
-  that link.
 
 An access-sharing invitation remains pending until its recipient accepts it.
 The owner may grant only Wallet-defined channel eligibility and spending
 limits, may revoke the access later, and cannot delegate Wallet ownership or
 permission to share onward.
 
-## Referral credit calculation
+### Channel rate card
 
-An insufficient-credit refusal may create a Wallet-owned referral offer for
-that communication. The offer has a fixed target of **five completed,
-distinct, new verified referrals**. Opening, copying, or sending a share link
-does not count as a completion.
-
-A referral completes only after the referred channel identity has successfully
-finished Suite email verification, consent, mobile confirmation, and TOTP
-verification. It does not need to complete a Chat App action. Wallet must not
-count an existing identity, a duplicate referral, or an identity that has
-already earned a referral grant for the inviter.
-
-Wallet calculates the offer against the exact credit shortfall, not a
-hard-coded currency amount:
-
-```text
-required = resolved credit debit for the blocked message
-available = eligible Wallet balance at offer creation
-shortfall = max(required - available, 0)
-completed referrals required = 5
-```
-
-Credits are stored as integer microcredits. For referral number `k` from 1 to
-5, Wallet grants:
-
-```text
-grant(k) = floor(k * shortfall / 5) - floor((k - 1) * shortfall / 5)
-```
-
-The five grants always add up to exactly `shortfall`. Each grant is ordinary,
-available promotional Wallet credit, not a reservation for the originally
-blocked communication: the customer may use it for any eligible later message.
-Wallet therefore must not promise that five referrals will create a particular
-invoice or message; it promises promotional credit only. A later rate change
-or spending the grants on another message can still leave the original
-communication unfunded. This avoids rounding errors and remains true for every
-configured channel, meter, rate, and currency. Wallet must record the offer
-ID, referral number, referred identity, and grant ledger entry idempotently.
-
-For example, if a message needs `0.005000` credits and the Wallet balance is
-zero, each of the five successful referrals grants `0.001000` credits. If the
-balance is `0.002000`, the exact `0.003000` shortfall is granted across five
-referrals (`0.000600` each in this example).
-
-### Message rate card
-
-Every Telegram and WhatsApp message has a default cost of `0.000000 CRD`.
-Wallet charges credits only when an operator approves a positive, channel- and
-message-specific cost. To change a price later, update that message's rate-card
-entry; no channel-wide message cost needs to be changed. Legacy channel-default
-and message-ignore records remain in the database for audit history, but
-channel defaults no longer affect authorization costs and new ignore rules are
-not created. The Rate Card UI reads only
-eligible definitions from the active Message Center release in Supabase through
+Telegram and WhatsApp each start with a default of `0.000000 CRD` per message.
+In WordPress, an operator can approve a non-negative **Default CRD per message**
+for either channel at any time. That approved channel default applies to every
+billable message in the channel unless the message has its own Rate card rule.
+An existing pre-change channel default is treated as `0.000000 CRD` until an
+operator approves a new value, so upgrading does not unexpectedly charge
+messages. A message override is channel-specific and sets a different positive
+cost; a message ignore is channel-specific and resolves a message to zero.
+The Rate Card UI reads only eligible definitions from the active Message Center release in Supabase through
 the protected `wallet-operations` `catalog.rate_card` action. Message Center
 supplies definitions and presentation only; it does not mark a message as
 billable or set its price. Internal Registry, Wallet, Suite, and Share groups
@@ -204,21 +148,25 @@ requires a fresh Registry-authority TOTP approval bound to the exact change.
 
 The effective cost for a billable catalog message is resolved in this order:
 
-1. An approved **Message cost** entry supplies that selected message's positive cost.
-2. Otherwise, Wallet uses the default: `0.000000 CRD`.
+1. A **Message ignore** rule makes the selected channel/group/message free: `0.000000 CRD`.
+2. Otherwise, a **Message override** supplies the selected message's positive cost.
+3. Otherwise, Wallet uses that channel's approved default, initially `0.000000 CRD`.
 
-For compatibility, an existing legacy **Message ignore** rule still resolves to
-zero credits. A zero-cost message still receives
+A zero-cost message still receives
 a short-lived Wallet authorization so SB Coms can verify the normal send
 bindings, but it creates no debit, reservation, release, or shared-wallet-limit
-usage. A message definition that is already non-billable remains non-billable;
-it does not need a Wallet authorization or a Message ignore rule.
+usage. Every Chat App definition, including an explicit zero-cost definition,
+MUST have a billing meter and receive that Wallet authorization. Only a Suite
+global/context definition or a Wallet-owned recovery/context definition is
+non-billable; it has no billing meter and does not enter the Wallet
+authorization or settlement path. A Chat App definition cannot use that
+non-billable classification to bypass Wallet policy.
 
 In WordPress, open **Tools → Chat App Wallet**. Use **Credit adjustment** to
-grant or remove an individual Wallet's credits. Use **Rate card** to select an
-eligible Message Center group and message, then set that message's USD per
-credit and CRD required. All messages without an approved message-cost entry
-are free. Each submission creates a short-lived challenge; enter the current
+grant or remove an individual Wallet's credits. Use **Channel defaults** to
+view or change the USD-per-credit and Default CRD per message for Telegram or
+WhatsApp. Use **Rate card** to set a message-specific override or make a
+selected message free. Each submission creates a short-lived challenge; enter the current
 authenticator code to approve that exact change. The active rate-card table
 shows the current rules and their reason.
 
@@ -240,11 +188,10 @@ Wallet provisions or reactivates an owned Wallet only after `verified`.
 
 On `withdrawn` or `revoked`, Wallet must immediately mark the owned Wallet
 **held and unavailable**. It must refuse new billing authorizations, top-ups,
-referral awards, and new shared-Wallet grants; release any reservation that has
-not already reached provider acceptance; revoke the identity's shared-Wallet
-access; and cancel pending access-sharing and referral offers. SB Coms also
-rejects a still-unconsumed authorization for a no-longer-verified identity, so
-the result does not depend on lifecycle-event delivery timing. A provider-
+and new shared-Wallet grants; release any reservation that has not already
+reached provider acceptance; and revoke the identity's shared-Wallet access.
+SB Coms also rejects a still-unconsumed authorization for a no-longer-verified
+identity, so the result does not depend on lifecycle-event delivery timing. A provider-
 accepted send is accounted for normally because it occurred before withdrawal;
 Wallet must not attempt to erase or reverse that factual usage event.
 
@@ -253,9 +200,9 @@ Withdrawal does not silently consume or delete credit:
 - **Purchased credit** remains held in the owned Wallet. It may be refunded
   through the applicable Wallet refund policy, or reactivated only after the
   same canonical channel identity completes fresh onboarding and consent.
-- **Referral and other promotional credit** remains separately identifiable in
-  the immutable ledger and may expire or remain held only according to the
-  published promotion terms; it is not automatically cash-refundable.
+- **Promotional credit** remains separately identifiable in the immutable
+  ledger and is subject to the published promotion terms; it is not
+  automatically cash-refundable.
 - **Shared-Wallet credit** belongs to the shared Wallet owner. The withdrawing
   identity loses access, while the shared balance remains unchanged.
 
@@ -316,10 +263,48 @@ channel without unintentionally funding another.
 The Wallet plugin SHALL NOT edit SB Coms tables directly. Conversely, SB Coms
 SHALL NOT initiate a payment, issue an invoice, or calculate a customer price.
 
+## Ledger backend contract
+
+Wallet is the commercial-policy and payment-administration layer; it is not
+coupled to a particular ledger implementation. It calls a stable internal
+**Ledger Port** for every balance-changing decision. The port exposes only the
+following semantic operations:
+
+- `credit` — post a verified purchase, grant, refund, or adjustment;
+- `reserve` — hold available credit for one authorised outbound communication;
+- `consume` — settle that reservation after provider acceptance;
+- `release` — remove a reservation after expiry, cancellation, or failed send;
+- `reverse` — create a compensating entry for a completed transaction; and
+- `balance` — return available, reserved, and posted credit for a Wallet scope.
+
+Every mutating operation includes a Wallet-generated immutable transaction ID
+and idempotency key. The ledger backend must return a durable acceptance before
+Wallet reports a completed credit, reservation, consumption, release, or
+reversal. A `2xx` acknowledgement from a transport alone is insufficient.
+
+The initial `InternalLedgerAdapter` persists the ledger in Wallet-owned
+database tables. A future `ExternalLedgerAdapter` implements the same port and
+uses TLS, scoped bearer credentials stored in protected runtime configuration,
+credential rotation, idempotency headers, request/response audit IDs, and
+reconciliation. Changing adapters must not change a Chat App, SB Coms, payment
+provider, authorization-ticket claim, or Wallet policy.
+
+If an external ledger cannot be durably reached, Wallet records an idempotent
+outbox item locally and exposes the operation as `pending`; it must not claim a
+completed debit or credit. A worker retries the item and reconciles the final
+ledger result using the immutable transaction ID and idempotency key.
+
+The ledger model is double-entry even while credits are represented in `CRD`.
+Each entry records balanced postings between named accounts, including customer
+available credit, customer reserved credit, platform message-usage/revenue,
+promotional-credit liability, and payment-clearing accounts. A correction or
+refund is a new compensating transaction, never an edit to a posted entry.
+
 ## Usage lifecycle
 
-The canonical credit ledger is append-only. A cached balance may be maintained
-for speed, but every balance must be explainable from ledger entries.
+The Ledger Port is the canonical append-only credit ledger. Wallet may maintain
+a cached balance for speed, but every balance must be explainable from the
+ledger's immutable, balanced postings.
 
 1. A verified PayPal or Yoco payment creates a `purchase` ledger entry.
 2. An authorised promotion or support correction creates a `grant`, `refund`,
@@ -421,8 +406,11 @@ wallet-selection or pricing input; `payerReference` is an opaque reference and
 ```
 
 SB Coms verifies the signature and every binding before atomically consuming
-the authorization. A non-billable definition has no `billing_meter` and MUST
-NOT include `billingAuthorization`.
+the authorization. An explicitly zero-cost Chat App definition still has a
+`billing_meter` and includes `billingAuthorization`; its authorization carries
+a zero reserved amount. Only Suite global/context and Wallet-owned
+recovery/context definitions are non-billable, have no `billing_meter`, and
+MUST NOT include `billingAuthorization`.
 
 ## Insufficient credit contract
 
@@ -432,28 +420,13 @@ the original billable command and no provider send is attempted. Wallet may
 then submit the applicable non-billable Message Center definition from the
 `postoochat_wallet` group—normally `WALLET_CREDIT_REQUIRED`—using Wallet's
 restricted registered SB Coms application identity. That definition contains
-the factual funding, referral, and approved-reply presentation; it is not an
-SB Coms seed message and the requesting chat app does not choose it. The
-insufficient-credit definition offers only `1. Add credits` and `2. Invite for
-credits`; Wallet access sharing is intentionally not available in that path.
-
-After the customer replies `2`, Wallet creates or resumes the applicable
-five-referral offer and sends the instruction and channel-specific share link.
-The share-link target opens the relevant contact picker and carries the
-customer's referral URL in its prefilled text. The raw referral URL remains
-available for copying, but copying or tapping either link does not earn credit.
-
-### Referral runtime
-
-Wallet stores only an opaque, SHA-256-hashed referral token. Supabase converts
-the raw token into `START PTC_REF_<token>` for WhatsApp and the equivalent
-Telegram `/start` payload. It binds the token only when a channel identity has
-no existing onboarding state; Wallet additionally rejects self-referrals and
-enforces one referred identity across all campaigns. When the existing signed
-`verified` lifecycle event arrives, Wallet serializes the campaign, posts the
-integer-microcredit grant, closes the campaign after its fifth grant, and asks
-SB Coms to deliver `WALLET_INVITE_SUCCESS`. A repeated lifecycle event cannot
-create another grant or notification.
+only factual funding and approved-reply presentation; it is not an SB Coms seed
+message and the requesting chat app does not choose it. The insufficient-credit
+definition offers two recovery actions: `1. Add Free Credits`, which opens
+`PROMO_MENU`, and `2. Add Paid Credits`, which opens `WALLET_ADD_CREDITS`.
+Wallet access sharing is intentionally not available in that path. Opening
+`PROMO_MENU` is customer navigation only; it does not provide Promotions with
+Wallet state or create a Wallet-to-Promotions integration.
 
 ## Wallet Message Center contract
 
@@ -464,10 +437,10 @@ price/balance/payer, or choose an Owner-only definition.
 
 | Definition | When Wallet sends it | Required variables | Initial message copy |
 | --- | --- | --- | --- |
-| `WALLET_CREDIT_REQUIRED` | A billable communication is refused for insufficient credit. It offers `1. Add credits` and `2. Invite for credits`. | `businessReferenceLabel`, `requiredCredit`, `availableCredit`, `shortfallCredit`, `creditUnit` | Your credit balance is insufficient to create {{businessReferenceLabel}}. It requires {{requiredCredit}} {{creditUnit}}; your balance is {{availableCredit}} {{creditUnit}}. You need {{shortfallCredit}} {{creditUnit}} more.<br><br>Reply with an option:<br>1. Add credits<br>2. Invite for credits |
-| `WALLET_OVERVIEW` | A non-Owner explicitly requests a balance. It offers `1. Add credits` and `2. Invite for credits`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits<br>2. Invite for credits |
+| `WALLET_CREDIT_REQUIRED` | A billable communication is refused for insufficient credit. `1. Add Free Credits` opens `PROMO_MENU`; `2. Add Paid Credits` opens `WALLET_ADD_CREDITS`. | `businessReferenceLabel`, `requiredCredit`, `availableCredit`, `shortfallCredit`, `creditUnit` | Your credit balance is insufficient to create {{businessReferenceLabel}}. It requires {{requiredCredit}} {{creditUnit}}; your balance is {{availableCredit}} {{creditUnit}}. You need {{shortfallCredit}} {{creditUnit}} more.<br><br>Reply with an option:<br>1. Add Free Credits<br>2. Add Paid Credits |
+| `WALLET_OVERVIEW` | A non-Owner explicitly requests a balance. It offers `1. Add credits`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits |
 | `WALLET_SHOW_CREDITS` | The verified user sends the globally reserved `CREDIT` command. It shows the currently available Wallet credit without opening the Wallet action menu. | `available_credit_display` | Available credit: {{available_credit_display}} |
-| `WALLET_OVERVIEW_OWNER` | A current Workspace Owner explicitly requests a balance. It offers `1. Add credits`, `2. Share wallet with a user`, and `3. Invite for credits`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits<br>2. Share wallet with a user<br>3. Invite for credits |
+| `WALLET_OVERVIEW_OWNER` | A current Workspace Owner explicitly requests a balance. It offers `1. Add credits` and `2. Share wallet with a user`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits<br>2. Share wallet with a user |
 | `WALLET_ADD_CREDITS` | The customer selects the top-up route. | `checkoutUrl` | Add credits securely here:<br>{{checkoutUrl}} |
 | `WALLET_ACTIVITY` | The customer explicitly requests Wallet activity. It is never sent as a normal chat-menu item. | `activitySummary`, `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Recent activity:<br>{{activitySummary}} |
 | `WALLET_SHARE_START` | A current Workspace Owner selects Wallet access sharing. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
@@ -475,16 +448,6 @@ price/balance/payer, or choose an Owner-only definition.
 | `WALLET_SHARE_PENDING` | The Owner has confirmed and the recipient must accept the grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
 | `WALLET_SHARE_RECEIVED` | The recipient has accepted the grant; Wallet notifies the Owner and/or recipient using the appropriate approved copy. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
 | `WALLET_ACCESS_DENIED` | An administrator, worker, ordinary user, or otherwise ineligible identity requests Owner-only Wallet sharing. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. Only the current Workspace Owner can share wallet access. |
-| `WALLET_INVITE_FOR_CREDIT` | Wallet begins or resumes the referral recovery route. It promises promotional credits, never completion of a particular business action. | `completedInviteCount`, `completedInviteTarget`, `creditBalance`, `creditUnit` | Invite {{completedInviteTarget}} new verified people to earn promotional credits.<br><br>Your wallet balance is {{creditBalance}} {{creditUnit}}.<br>Verified invites: {{completedInviteCount}}/{{completedInviteTarget}}.<br><br>Reply 1 to receive your share link. |
-| `WALLET_INVITE_INSTRUCTION` | Wallet explains that only a new identity completing email verification, consent, mobile confirmation, and TOTP counts, and that the customer will receive progress updates. | `completedInviteCount`, `completedInviteTarget` | Share your personal invite with friends and family. A referral counts only after a new person completes email verification, consent, mobile confirmation, and TOTP verification.<br><br>Verified invites: {{completedInviteCount}}/{{completedInviteTarget}}. |
-| `WALLET_INVITE_LINK` | Wallet provides the channel-specific share link and copyable referral URL. | `walletInviteShareLink`, `walletInviteLink`, `completedInviteCount`, `completedInviteTarget` | Tap this link to share your invite with contacts:<br>{{walletInviteShareLink}}<br><br>Or copy your personal invite link:<br>{{walletInviteLink}}<br><br>Verified invites: {{completedInviteCount}}/{{completedInviteTarget}}. |
-| `WALLET_INVITE_SUCCESS` | A distinct referred identity has completed verification and Wallet has posted that referral's grant. | `referralDisplayName`, `creditGrant`, `creditBalance`, `creditUnit`, `completedInviteCount`, `completedInviteTarget` | {{referralDisplayName}} has completed verification through your invite. You earned {{creditGrant}} {{creditUnit}}.<br><br>Your wallet balance is now {{creditBalance}} {{creditUnit}}.<br>Verified invites: {{completedInviteCount}}/{{completedInviteTarget}}. |
-
-`referralDisplayName` must be a privacy-safe value. If the referred person has
-not consented to showing a name to the inviter, Wallet supplies a neutral value
-such as `A new user`; it never supplies a mobile number, Telegram identifier,
-or other channel address.
-
 The canonical insufficient-credit copy is conceptually:
 
 ```text
@@ -492,8 +455,8 @@ Your credit balance is insufficient to create {{businessReferenceLabel}}.
 You need {{shortfallCredit}} {{creditUnit}} more.
 
 Reply with an option:
-1. Add credits
-2. Invite for credits
+1. Add Free Credits
+2. Add Paid Credits
 ```
 
 The Owner balance definition is conceptually:
@@ -504,12 +467,7 @@ Your wallet balance is {{creditBalance}} {{creditUnit}}.
 Reply with an option:
 1. Add credits
 2. Share wallet with a user
-3. Invite for credits
 ```
-
-`completedInviteTarget` is supplied as `5` for this campaign. It is rendered
-to the customer but is not trusted from a reply or link; Wallet enforces the
-target and exact calculation described above.
 
 ## Registered PHP authorization service
 
@@ -537,6 +495,8 @@ and must verify the ticket without accessing Wallet records.
 - invoices, tax treatment, refunds, chargebacks and accounting exports;
 - multi-currency display while keeping each wallet's financial ledger
   separately reconcilable.
+- an external Ledger Port adapter, once the internal implementation has the
+  required operating history and reconciliation coverage.
 
 ## Security requirements
 

@@ -136,8 +136,9 @@ billable message in the channel unless the message has its own Rate card rule.
 An existing pre-change channel default is treated as `0.000000 CRD` until an
 operator approves a new value, so upgrading does not unexpectedly charge
 messages. A message override is channel-specific and sets a different positive
-cost; a message ignore is channel-specific and resolves a message to zero.
-The Rate Card UI reads only eligible definitions from the active Message Center release in Supabase through
+cost. Existing message-ignore records continue to resolve to zero for
+compatibility, but the Rate card no longer creates them. The Rate Card UI reads
+only eligible definitions from the active Message Center release in Supabase through
 the protected `wallet-operations` `catalog.rate_card` action. Message Center
 supplies definitions and presentation only; it does not mark a message as
 billable or set its price. Internal Registry, Wallet, Suite, and Share groups
@@ -165,8 +166,10 @@ non-billable classification to bypass Wallet policy.
 In WordPress, open **Tools → Chat App Wallet**. Use **Credit adjustment** to
 grant or remove an individual Wallet's credits. Use **Channel defaults** to
 view or change the USD-per-credit and Default CRD per message for Telegram or
-WhatsApp. Use **Rate card** to set a message-specific override or make a
-selected message free. Each submission creates a short-lived challenge; enter the current
+WhatsApp. Use **Rate card** to set only a message-specific CRD override. Its
+USD-per-credit value is taken from the selected channel's Channel defaults,
+and the Scope field is not shown. Remove a listed cost before adding a new one
+for the same message. Each submission creates a short-lived challenge; enter the current
 authenticator code to approve that exact change. The active rate-card table
 shows the current rules and their reason.
 

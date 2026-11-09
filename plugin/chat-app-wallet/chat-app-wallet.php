@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PosTooChat Chat App Wallet
  * Description: Shared commercial wallet and one-use billing authorization service for PosTooChat apps.
- * Version: 0.3.1
+ * Version: 0.3.2
  * Requires at least: 6.0
  * Requires PHP: 8.1
  * Author: PosTooChat
@@ -22,6 +22,7 @@ final class PTC_Chat_App_Wallet {
 
 	private function __construct() {
 		add_action( 'admin_menu', array( $this, 'add_admin_page' ) );
+		add_action( 'admin_footer', array( $this, 'restore_pending_rate_tab' ) );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		add_action( 'admin_post_ptc_wallet_revoke_access', array( $this, 'handle_revoke_access' ) );
 		add_action( 'ptc_wallet_release_expired_reservations', array( $this, 'release_expired_reservations' ) );
@@ -442,6 +443,15 @@ final class PTC_Chat_App_Wallet {
 
 	public function add_admin_page() {
 		add_management_page( __( 'Chat App Wallet', 'chat-app-wallet' ), __( 'Chat App Wallet', 'chat-app-wallet' ), 'manage_options', 'chat-app-wallet', array( $this, 'render_admin_page' ) );
+	}
+
+	/** Keep a pending rate-card 2FA approval on the Rate card tab after POST. */
+	public function restore_pending_rate_tab() {
+		if ( ! current_user_can( 'manage_options' ) || 'chat-app-wallet' !== ( $_GET['page'] ?? '' ) ) return;
+		$pending = get_transient( 'ptc_wallet_rate_' . get_current_user_id() );
+		?>
+		<script>document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('button[name="ptc_wallet_rate_remove_request"]').forEach(function(button){button.textContent='Remove';});if(<?php echo wp_json_encode( is_array( $pending ) ); ?>){var tab=document.querySelector('[data-wallet-tab="rates"]'),panel=document.querySelector('[data-wallet-panel="rates"]');if(tab&&panel){document.querySelectorAll('[data-wallet-tab]').forEach(function(item){item.classList.remove('nav-tab-active');});document.querySelectorAll('[data-wallet-panel]').forEach(function(item){item.style.display='none';});tab.classList.add('nav-tab-active');panel.style.display='block';}}});</script>
+		<?php
 	}
 
 	public function render_admin_page() {

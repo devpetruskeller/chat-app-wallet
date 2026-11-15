@@ -472,13 +472,34 @@ price/balance/payer, or choose an Owner-only definition.
 | `WALLET_OVERVIEW` | A non-Owner explicitly requests a balance. It offers `1. Add credits`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits |
 | `WALLET_SHOW_CREDITS` | The verified user sends the globally reserved `CREDIT` command. It shows the currently available Wallet credit without opening the Wallet action menu. | `available_credit_display` | Available credit: {{available_credit_display}} |
 | `WALLET_OVERVIEW_OWNER` | A current Workspace Owner explicitly requests a balance. It offers `1. Add credits` and `2. Share wallet with a user`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits<br>2. Share wallet with a user |
-| `WALLET_ADD_CREDITS` | The customer selects the top-up route. | `checkoutUrl` | Add credits securely here:<br>{{checkoutUrl}} |
+| `WALLET_ADD_CREDITS` | The customer requests a paid top-up and chooses a configured payment provider. Wallet handles the selected action and opens a short-lived, provider-specific secure checkout page. | `wallet_label`, `available_credit_display`, `minimum_top_up_display`, `return_app_label` | {{wallet_label}} available credit: {{available_credit_display}}.<br>Minimum top-up: {{minimum_top_up_display}}.<br><br>Choose a payment method:<br>1. Pay with PayPal<br>2. Pay with Yoco<br>3. Back to Wallet<br>4. {{return_app_label}} |
+| `WALLET_TOPUP_CHECKOUT` | The customer has selected an available payment provider. Wallet creates the one-use checkout-selection URL, then sends this definition. | `provider_label`, `checkout_url` | Continue securely with {{provider_label}}:<br>{{checkout_url}} |
 | `WALLET_ACTIVITY` | The customer explicitly requests Wallet activity. It is never sent as a normal chat-menu item. | `activitySummary`, `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Recent activity:<br>{{activitySummary}} |
 | `WALLET_SHARE_START` | A current Workspace Owner selects Wallet access sharing. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
 | `WALLET_SHARE_CONFIRM` | Wallet has resolved the proposed recipient and asks the Owner to confirm the pending grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
 | `WALLET_SHARE_PENDING` | The Owner has confirmed and the recipient must accept the grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
 | `WALLET_SHARE_RECEIVED` | The recipient has accepted the grant; Wallet notifies the Owner and/or recipient using the appropriate approved copy. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
 | `WALLET_ACCESS_DENIED` | An administrator, worker, ordinary user, or otherwise ineligible identity requests Owner-only Wallet sharing. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. Only the current Workspace Owner can share wallet access. |
+
+`WALLET_ADD_CREDITS` uses Wallet-managed actions, rather than a static Message
+Center next-message link:
+
+| Action key | Suggested label and trigger | Wallet behaviour |
+| --- | --- | --- |
+| `pay_with_paypal` | `Pay with PayPal` / `1` | Validate that PayPal and an eligible package are configured, then create a short-lived Wallet checkout-selection URL limited to PayPal and send `WALLET_TOPUP_CHECKOUT`. |
+| `pay_with_yoco` | `Pay with Yoco` / `2` | Validate that Yoco and an eligible package are configured, then create a short-lived Wallet checkout-selection URL limited to Yoco and send `WALLET_TOPUP_CHECKOUT`. |
+| `back_to_wallet` | `Back to Wallet` / `3` | Return to `WALLET_OVERVIEW`. |
+| `return_to_app` | `{{return_app_label}}` / `4` | Resume the last active application or return to the Suite entry menu. |
+
+Each action's `nextMessageId` remains empty. Wallet chooses and populates
+`WALLET_TOPUP_CHECKOUT`; Message Center never selects or constructs its URL.
+The checkout definition may render only Wallet-supplied `provider_label` and
+`checkout_url`; it must not receive provider credentials, package price, FX
+rate, or payer identity. Wallet creates the provider-specific URL only after
+the customer has selected a provider, and it records the resulting package and
+price snapshot before provider checkout. If a provider is not configured or has
+no eligible package, Wallet must return a factual unavailable response and must
+not create a purchase.
 The canonical insufficient-credit copy is conceptually:
 
 ```text

@@ -467,10 +467,52 @@ final class PTC_Chat_App_Wallet {
 		$client_id = defined( 'PTC_WALLET_PAYPAL_CLIENT_ID' ) ? trim( PTC_WALLET_PAYPAL_CLIENT_ID ) : ''; $secret = defined( 'PTC_WALLET_PAYPAL_CLIENT_SECRET' ) ? trim( PTC_WALLET_PAYPAL_CLIENT_SECRET ) : ''; $token = $client_id && $secret ? wp_remote_post( $this->paypal_base_url() . '/v1/oauth2/token', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Basic ' . base64_encode( $client_id . ':' . $secret ) ), 'body' => array( 'grant_type' => 'client_credentials' ) ) ) : new WP_Error( 'paypal_not_configured' ); $data = is_wp_error( $token ) ? array() : json_decode( wp_remote_retrieve_body( $token ), true ); $access = is_array( $data ) ? (string) ( $data['access_token'] ?? '' ) : ''; if ( ! $access ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_capture_unavailable' ), 503 ); $capture = wp_remote_post( $this->paypal_base_url() . '/v2/checkout/orders/' . rawurlencode( $order_id ) . '/capture', array( 'timeout' => 15, 'headers' => array( 'Authorization' => 'Bearer ' . $access, 'Content-Type' => 'application/json' ), 'body' => '{}' ) ); if ( is_wp_error( $capture ) || ! in_array( wp_remote_retrieve_response_code( $capture ), array( 200, 201 ), true ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'paypal_capture_failed' ), 502 ); return new WP_REST_Response( array( 'ok' => true, 'status' => 'payment_processing' ), 202 );
 	}
 
+	/**
+	 * Notify the customer's verified chat only after the purchase ledger entry
+	 * has committed. A delivery failure must never reverse or delay settlement.
+	 */
+	private function send_topup_success_notification( $purchase ) {
+		$token = defined( 'PTC_WALLET_NOTIFICATION_TOKEN' ) ? trim( PTC_WALLET_NOTIFICATION_TOKEN ) : '';
+		$operations_url = defined( 'PTC_WALLET_OPERATIONS_URL' ) ? trim( PTC_WALLET_OPERATIONS_URL ) : '';
+		$notification_url = preg_replace( '#/wallet-operations/?$#', '/wallet-notification', $operations_url );
+		if ( strlen( $token ) < 32 || ! is_string( $notification_url ) || false === filter_var( $notification_url, FILTER_VALIDATE_URL ) ) {
+			error_log( 'chat_app_wallet_topup_notification_not_configured' );
+			return;
+		}
+
+		global $wpdb;
+		$wallets = $wpdb->prefix . 'ptc_wallet_wallets';
+		$entities = $wpdb->prefix . 'ptc_wallet_entities';
+		$ledger = $wpdb->prefix . 'ptc_wallet_ledger';
+		$wallet = $wpdb->get_row( $wpdb->prepare( "SELECT w.wallet_id,w.channel,e.identity_key,COALESCE(SUM(l.credits),0) AS balance FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id LEFT JOIN $ledger l ON l.wallet_id=w.wallet_id WHERE w.wallet_id=%s GROUP BY w.wallet_id,w.channel,e.identity_key", $purchase['wallet_id'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( ! $wallet || ! in_array( $wallet['channel'], array( 'telegram', 'whatsapp' ), true ) || 0 !== strpos( $wallet['identity_key'], $wallet['channel'] . ':' ) ) {
+			error_log( 'chat_app_wallet_topup_notification_recipient_unavailable' );
+			return;
+		}
+		$provider_label = 'paypal' === $purchase['provider'] ? 'PayPal' : ( 'yoco' === $purchase['provider'] ? 'Yoco' : '' );
+		if ( ! $provider_label ) {
+			error_log( 'chat_app_wallet_topup_notification_provider_invalid' );
+			return;
+		}
+		$payload = array(
+			'channel' => $wallet['channel'],
+			'senderAddress' => substr( $wallet['identity_key'], strlen( $wallet['channel'] ) + 1 ),
+			'messageName' => 'WALLET_TOPUP_SUCCESS',
+			'variables' => array(
+				'wallet_label' => 'Your Wallet',
+				'provider_label' => $provider_label,
+				'purchased_credit_display' => number_format_i18n( (float) $purchase['credits'], 3 ) . ' CRD',
+				'available_credit_display' => number_format_i18n( (float) $wallet['balance'], 3 ) . ' CRD',
+			),
+		);
+		$response = wp_remote_post( $notification_url, array( 'timeout' => 10, 'headers' => array( 'Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json' ), 'body' => wp_json_encode( $payload ) ) );
+		if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) error_log( 'chat_app_wallet_topup_notification_delivery_failed' );
+	}
+
 	private function settle_purchase( $provider, $purchase_id, $payment_id, $amount_minor, $currency ) {
 		if ( ! $payment_id || $amount_minor < 1 || ! preg_match( '/^[A-Z]{3}$/', $currency ) ) return new WP_Error( 'provider_payment_invalid' ); global $wpdb; $purchases = $wpdb->prefix . 'ptc_wallet_purchases'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger'; $purchase = preg_match( '/^[0-9a-f-]{36}$/i', $purchase_id ) ? $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $purchases WHERE purchase_id=%s", $purchase_id ), ARRAY_A ) : $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $purchases WHERE provider=%s AND provider_payment_id=%s", $provider, $purchase_id ), ARRAY_A );
 		if ( ! $purchase || $purchase['provider'] !== $provider || (int) $purchase['amount_minor'] !== $amount_minor || $purchase['currency'] !== $currency ) return new WP_Error( 'provider_payment_mismatch' ); if ( 'settled' === $purchase['status'] ) return true;
-		$resolved_purchase_id = $purchase['purchase_id']; $wpdb->query( 'START TRANSACTION' ); try { $updated = $wpdb->update( $purchases, array( 'status' => 'settled', 'settled_at' => current_time( 'mysql', true ) ), array( 'purchase_id' => $resolved_purchase_id, 'status' => 'pending' ) ); if ( 1 !== $updated ) throw new Exception( 'provider_payment_not_pending' ); if ( ! $wpdb->insert( $ledger, array( 'ledger_id' => wp_generate_uuid4(), 'wallet_id' => $purchase['wallet_id'], 'event_type' => 'purchase', 'credits' => $purchase['credits'], 'reference_id' => $resolved_purchase_id, 'reason' => $provider . ':' . $payment_id, 'actor' => $provider, 'created_at' => current_time( 'mysql', true ) ) ) ) throw new Exception( 'purchase_ledger_store_failed' ); $wpdb->query( 'COMMIT' ); return true; } catch ( Exception $error ) { $wpdb->query( 'ROLLBACK' ); return new WP_Error( $error->getMessage() ); }
+		$resolved_purchase_id = $purchase['purchase_id']; $wpdb->query( 'START TRANSACTION' ); try { $updated = $wpdb->update( $purchases, array( 'status' => 'settled', 'settled_at' => current_time( 'mysql', true ) ), array( 'purchase_id' => $resolved_purchase_id, 'status' => 'pending' ) ); if ( 1 !== $updated ) throw new Exception( 'provider_payment_not_pending' ); if ( ! $wpdb->insert( $ledger, array( 'ledger_id' => wp_generate_uuid4(), 'wallet_id' => $purchase['wallet_id'], 'event_type' => 'purchase', 'credits' => $purchase['credits'], 'reference_id' => $resolved_purchase_id, 'reason' => $provider . ':' . $payment_id, 'actor' => $provider, 'created_at' => current_time( 'mysql', true ) ) ) ) throw new Exception( 'purchase_ledger_store_failed' ); $wpdb->query( 'COMMIT' ); $this->send_topup_success_notification( $purchase ); return true; } catch ( Exception $error ) { $wpdb->query( 'ROLLBACK' ); return new WP_Error( $error->getMessage() ); }
 	}
 
 	private function verify_yoco_webhook( WP_REST_Request $request, $body ) {

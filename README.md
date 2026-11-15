@@ -75,10 +75,16 @@ The support UI additionally needs `PTC_WALLET_OPERATIONS_URL` (the deployed
 Supabase `wallet-operations` function URL) and the matching
 `PTC_WALLET_OPERATIONS_TOKEN`. The token is an independent high-entropy secret:
 place the same value in Supabase as `PT_WALLET_OPERATIONS_TOKEN` and in the
-server's `wp-config.php` as `PTC_WALLET_OPERATIONS_TOKEN`. It is never entered
+protected Wallet runtime as `PTC_WALLET_OPERATIONS_TOKEN`. It is never entered
 in the WordPress dashboard. The ignored `.chatappenv` file is a local reference
-only; WordPress does not load it. The production constants must be defined in
-`wp-config.php`.
+only; WordPress does not load it.
+
+Post-settlement receipts additionally require an independent high-entropy
+`PT_WALLET_NOTIFICATION_TOKEN` in Supabase and matching
+`PTC_WALLET_NOTIFICATION_TOKEN` in the protected Wallet runtime. The
+`wallet-notification` function accepts that token only for
+`WALLET_TOPUP_SUCCESS`; it does not grant Wallet access to arbitrary message
+delivery. Wallet calls it only after the purchase ledger transaction commits.
 
 The 2FA-protected operator controls additionally require
 `PTC_WALLET_2FA_URL` (the deployed `registry-2fa` function URL) and

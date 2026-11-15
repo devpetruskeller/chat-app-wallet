@@ -17,6 +17,7 @@
     "PTC_WALLET_PAYPAL_CLIENT_SECRET": { "type": "secret", "required": false, "purpose": "PayPal adapter client secret when checkout is enabled" },
     "PTC_WALLET_PAYPAL_TOPUP_PACKAGES": { "type": "secret", "required": false, "purpose": "Server-managed JSON credit packages and their enabled PayPal/Yoco providers" },
     "PTC_WALLET_PAYPAL_BASE_URL": { "type": "url", "required": false, "purpose": "PayPal API base URL; use Sandbox or Live deliberately" },
+    "PTC_WALLET_FX_RATE_API_BASE_URL": { "type": "url", "required": false, "purpose": "Server-side reference FX API base URL for local-provider checkout conversion" },
     "PTC_WALLET_PAYPAL_WEBHOOK_ID": { "type": "identifier", "required": false, "purpose": "PayPal webhook identifier when checkout is enabled" },
     "PTC_WALLET_YOCO_SECRET_KEY": { "type": "secret", "required": false, "purpose": "Yoco adapter secret when checkout is enabled" },
     "PTC_WALLET_YOCO_BASE_URL": { "type": "url", "required": false, "purpose": "Yoco API base URL; defaults to the production endpoint" },

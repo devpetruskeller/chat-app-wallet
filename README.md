@@ -71,6 +71,13 @@ stores the configured amount, currency, and credit quantity before opening a
 provider-hosted checkout, then credits the Wallet only after a verified webhook
 matches that recorded purchase exactly.
 
+Yoco accepts ZAR only. A package priced in USD can include `yoco` in its
+`providers` list: Wallet converts its USD amount to ZAR server-side using the
+reference endpoint named by `PTC_WALLET_FX_RATE_API_BASE_URL`, caches the rate
+for five minutes, rounds to cents, and stores that quoted ZAR amount with the
+purchase before it opens Yoco Checkout. The package's USD amount remains the
+commercial source price; the provider's ZAR amount is a settlement snapshot.
+
 The support UI additionally needs `PTC_WALLET_OPERATIONS_URL` (the deployed
 Supabase `wallet-operations` function URL) and the matching
 `PTC_WALLET_OPERATIONS_TOKEN`. The token is an independent high-entropy secret:

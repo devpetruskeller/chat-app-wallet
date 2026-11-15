@@ -228,6 +228,11 @@ final class PTC_Chat_App_Wallet {
 		if ( ! $package ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'topup_package_not_configured' ), 422 );
 		$package = $package[0]; $currency = strtoupper( sanitize_text_field( $package['currency'] ?? '' ) ); $amount = (string) ( $package['amount'] ?? '' ); $credits = (float) ( $package['credits'] ?? 0 );
 		if ( ! preg_match( '/^[A-Z]{3}$/', $currency ) || ! preg_match( '/^\d+(?:\.\d{1,2})?$/', $amount ) || $credits <= 0 || ( isset( $package['providers'] ) && ! in_array( $provider, (array) $package['providers'], true ) ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'topup_package_invalid' ), 422 );
+		if ( 'yoco' === $provider ) {
+			$quote = $this->yoco_checkout_quote( $currency, $amount );
+			if ( is_wp_error( $quote ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $quote->get_error_code() ), 503 );
+			$currency = $quote['currency']; $amount = $quote['amount'];
+		}
 		list( $channel, $identity ) = $identity_request; global $wpdb; $wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM {$wpdb->prefix}ptc_wallet_wallets w JOIN {$wpdb->prefix}ptc_wallet_entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ) );
 		if ( ! $wallet_id ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'wallet_not_active' ), 422 );
 		$purchase = array( 'purchase_id' => wp_generate_uuid4(), 'wallet_id' => $wallet_id, 'provider' => $provider, 'sku' => $sku, 'currency' => $currency, 'amount_minor' => (int) round( (float) $amount * 100 ), 'credits' => number_format( $credits, 6, '.', '' ), 'status' => 'created', 'created_at' => current_time( 'mysql', true ) );
@@ -236,6 +241,24 @@ final class PTC_Chat_App_Wallet {
 		if ( is_wp_error( $result ) ) { $wpdb->update( $wpdb->prefix . 'ptc_wallet_purchases', array( 'status' => 'failed' ), array( 'purchase_id' => $purchase['purchase_id'] ) ); return new WP_REST_Response( array( 'ok' => false, 'error' => $result->get_error_code() ), 503 ); }
 		$wpdb->update( $wpdb->prefix . 'ptc_wallet_purchases', array( 'provider_payment_id' => $result['id'], 'status' => 'pending' ), array( 'purchase_id' => $purchase['purchase_id'] ) );
 		return new WP_REST_Response( array( 'ok' => true, 'provider' => $provider, 'purchaseId' => $purchase['purchase_id'], 'checkoutUrl' => $result['url'] ), 201 );
+	}
+
+	/** Convert the USD package into Yoco's required ZAR checkout currency. */
+	private function yoco_checkout_quote( $source_currency, $source_amount ) {
+		if ( 'USD' !== $source_currency ) return new WP_Error( 'yoco_conversion_currency_unsupported' );
+		$cache_key = 'ptc_wallet_fx_usd_zar'; $rate = get_transient( $cache_key );
+		if ( ! is_numeric( $rate ) || (float) $rate <= 0 ) {
+			$base = defined( 'PTC_WALLET_FX_RATE_API_BASE_URL' ) ? rtrim( trim( PTC_WALLET_FX_RATE_API_BASE_URL ), '/' ) : 'https://api.frankfurter.dev/v2/rate';
+			if ( false === filter_var( $base, FILTER_VALIDATE_URL ) ) return new WP_Error( 'yoco_conversion_unavailable' );
+			$response = wp_remote_get( $base . '/USD/ZAR', array( 'timeout' => 8, 'headers' => array( 'Accept' => 'application/json' ) ) );
+			$body = is_wp_error( $response ) ? array() : json_decode( wp_remote_retrieve_body( $response ), true );
+			$rate = is_array( $body ) ? (float) ( $body['rate'] ?? 0 ) : 0;
+			if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) || $rate <= 0 || $rate > 1000 ) return new WP_Error( 'yoco_conversion_unavailable' );
+			set_transient( $cache_key, $rate, 5 * MINUTE_IN_SECONDS );
+		}
+		$amount = round( (float) $source_amount * (float) $rate, 2 );
+		if ( $amount < 2 ) return new WP_Error( 'yoco_conversion_below_minimum' );
+		return array( 'currency' => 'ZAR', 'amount' => number_format( $amount, 2, '.', '' ) );
 	}
 
 	/** Render an opaque-session checkout chooser; the browser never receives a wallet identity or provider secret. */
@@ -258,7 +281,7 @@ final class PTC_Chat_App_Wallet {
 			$errors = array( 'paypal_not_configured' => 'PayPal Sandbox is not configured yet.', 'paypal_checkout_unavailable' => 'PayPal Sandbox could not authenticate this checkout.', 'paypal_checkout_create_failed' => 'PayPal Sandbox could not create this checkout.', 'yoco_not_configured' => 'Yoco is not configured yet.', 'yoco_checkout_create_failed' => 'Yoco could not create this checkout.' );
 			$error = $errors[ $error_code ] ?? 'That payment option is currently unavailable. Return to Wallet and choose Add Credits to try again.';
 		}
-		ob_start(); ?><!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Add wallet credits</title></head><body><main><h1>Add wallet credits</h1><?php if ( $error ) : ?><p><?php echo esc_html( $error ); ?></p><?php endif; ?><?php foreach ( (array) $packages as $package ) : if ( ! is_array( $package ) ) continue; $providers = array_intersect( array( 'paypal', 'yoco' ), (array) ( $package['providers'] ?? array( 'paypal', 'yoco' ) ) ); if ( ! empty( $session['provider'] ) ) $providers = array_intersect( $providers, array( $session['provider'] ) ); foreach ( $providers as $provider ) : ?><form method="post"><input type="hidden" name="session" value="<?php echo esc_attr( $token ); ?>"><input type="hidden" name="package" value="<?php echo esc_attr( sanitize_key( $package['sku'] ?? '' ) ); ?>"><input type="hidden" name="provider" value="<?php echo esc_attr( $provider ); ?>"><button type="submit">Pay <?php echo esc_html( strtoupper( $provider ) . ' — ' . ( $package['currency'] ?? '' ) . ' ' . ( $package['amount'] ?? '' ) . ' for ' . ( $package['credits'] ?? '' ) . ' CRD' ); ?></button></form><?php endforeach; endforeach; ?></main></body></html><?php nocache_headers(); header( 'Content-Type: text/html; charset=UTF-8' ); echo ob_get_clean(); exit;
+		ob_start(); ?><!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Add wallet credits</title></head><body><main><h1>Add wallet credits</h1><?php if ( $error ) : ?><p><?php echo esc_html( $error ); ?></p><?php endif; ?><?php foreach ( (array) $packages as $package ) : if ( ! is_array( $package ) ) continue; $providers = array_intersect( array( 'paypal', 'yoco' ), (array) ( $package['providers'] ?? array( 'paypal', 'yoco' ) ) ); if ( ! empty( $session['provider'] ) ) $providers = array_intersect( $providers, array( $session['provider'] ) ); foreach ( $providers as $provider ) : $price = 'yoco' === $provider && 'USD' === strtoupper( (string) ( $package['currency'] ?? '' ) ) ? 'ZAR amount calculated at checkout from USD ' . ( $package['amount'] ?? '' ) : ( $package['currency'] ?? '' ) . ' ' . ( $package['amount'] ?? '' ); ?><form method="post"><input type="hidden" name="session" value="<?php echo esc_attr( $token ); ?>"><input type="hidden" name="package" value="<?php echo esc_attr( sanitize_key( $package['sku'] ?? '' ) ); ?>"><input type="hidden" name="provider" value="<?php echo esc_attr( $provider ); ?>"><button type="submit">Pay <?php echo esc_html( strtoupper( $provider ) . ' — ' . $price . ' for ' . ( $package['credits'] ?? '' ) . ' CRD' ); ?></button></form><?php endforeach; endforeach; ?></main></body></html><?php nocache_headers(); header( 'Content-Type: text/html; charset=UTF-8' ); echo ob_get_clean(); exit;
 	}
 
 	private function create_paypal_checkout( $purchase, $amount ) {

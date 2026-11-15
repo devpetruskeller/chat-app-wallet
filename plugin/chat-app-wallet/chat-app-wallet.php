@@ -471,7 +471,7 @@ final class PTC_Chat_App_Wallet {
 	/** The verified webhook, not this browser page, confirms and credits payment. */
 	private function render_paypal_return_page() {
 		status_header( 202 ); nocache_headers(); header( 'Content-Type: text/html; charset=utf-8' );
-		echo '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment submitted</title></head><body><p>Payment submitted. Your Wallet will confirm it in chat shortly.</p><p>This page will now close. If it remains open, return to the chat app.</p><button type="button" onclick="window.close()">Close</button><script>window.close();</script></body></html>';
+		echo '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment submitted</title></head><body><p>Payment submitted. Your Wallet will confirm it in chat shortly.</p><p>Please close this page and return to the chat app.</p></body></html>';
 		exit;
 	}
 
@@ -504,7 +504,9 @@ final class PTC_Chat_App_Wallet {
 		}
 		$payload = array(
 			'channel' => $wallet['channel'],
-			'senderAddress' => substr( $wallet['identity_key'], strlen( $wallet['channel'] ) + 1 ),
+			// Twilio requires the whatsapp:+E.164 address, while Telegram needs
+			// its channel prefix removed before delivery.
+			'senderAddress' => 'whatsapp' === $wallet['channel'] ? $wallet['identity_key'] : substr( $wallet['identity_key'], strlen( $wallet['channel'] ) + 1 ),
 			'messageName' => 'WALLET_TOPUP_SUCCESS',
 			'variables' => array(
 				'wallet_label' => 'Your Wallet',

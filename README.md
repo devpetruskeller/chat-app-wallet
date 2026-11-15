@@ -474,6 +474,7 @@ price/balance/payer, or choose an Owner-only definition.
 | `WALLET_OVERVIEW_OWNER` | A current Workspace Owner explicitly requests a balance. It offers `1. Add credits` and `2. Share wallet with a user`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits<br>2. Share wallet with a user |
 | `WALLET_ADD_CREDITS` | The customer requests a paid top-up and chooses a configured payment provider. Wallet handles the selected action and opens a short-lived, provider-specific secure checkout page. | `wallet_label`, `available_credit_display`, `minimum_top_up_display`, `return_app_label` | {{wallet_label}} available credit: {{available_credit_display}}.<br>Minimum top-up: {{minimum_top_up_display}}.<br><br>Choose a payment method:<br>1. Pay with PayPal<br>2. Pay with Yoco<br>3. Back to Wallet<br>4. {{return_app_label}} |
 | `WALLET_TOPUP_CHECKOUT` | The customer has selected an available payment provider. Wallet creates the one-use checkout-selection URL, then sends this definition. | `provider_label`, `checkout_url` | Continue securely with {{provider_label}}:<br>{{checkout_url}} |
+| `WALLET_TOPUP_SUCCESS` | A provider webhook has been verified and Wallet has atomically settled the purchase ledger entry. It is a non-billable notification, never a browser-return message. | `wallet_label`, `provider_label`, `purchased_credit_display`, `available_credit_display` | Payment received via {{provider_label}}. {{purchased_credit_display}} was added to {{wallet_label}}.<br>Available credit: {{available_credit_display}} |
 | `WALLET_ACTIVITY` | The customer explicitly requests Wallet activity. It is never sent as a normal chat-menu item. | `activitySummary`, `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Recent activity:<br>{{activitySummary}} |
 | `WALLET_SHARE_START` | A current Workspace Owner selects Wallet access sharing. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
 | `WALLET_SHARE_CONFIRM` | Wallet has resolved the proposed recipient and asks the Owner to confirm the pending grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
@@ -500,6 +501,14 @@ the customer has selected a provider, and it records the resulting package and
 price snapshot before provider checkout. If a provider is not configured or has
 no eligible package, Wallet must return a factual unavailable response and must
 not create a purchase.
+
+`WALLET_TOPUP_SUCCESS` has no actions and no `nextMessageId`. Wallet sends it
+only after the provider webhook is verified and the Wallet purchase and ledger
+transaction commits. A checkout return URL, an approved browser page, or a
+pending provider record must never trigger this definition. The delivery
+boundary receives only the recipient channel identity, definition name, and
+the four listed display variables; it must not receive a provider payment ID,
+provider event payload, payer details, package price, or provider credentials.
 The canonical insufficient-credit copy is conceptually:
 
 ```text

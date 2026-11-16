@@ -483,6 +483,32 @@ All customer-facing Wallet messages are non-billable definitions in the
 variables listed below. A Chat App must not compose a Wallet message, supply a
 price/balance/payer, or choose an Owner-only definition.
 
+### Current Wallet menu
+
+The deployed Wallet menu is deliberately small. Keep the balance/status
+overview as the customer's Wallet context, but do not include an activity
+action. The recommended Message Center actions are:
+
+1. **Add Credits** (`add_credits`)
+2. **Share Wallet** (`share_access`)
+3. **Return To App** (`return_to_app`)
+4. **Suite Menu** (`suite_menu`)
+
+`Share Wallet` is visible as the planned next Wallet capability, but its secure
+owner-to-recipient invitation, confirmation, acceptance, and grant-creation
+workflow is **not installed yet**. Until that workflow is deployed,
+`share_access` returns `WALLET_ACCESS_DENIED` and never creates an access
+grant. It must not be represented as a working sharing feature.
+
+### Wallet activity is on ice
+
+`WALLET_ACTIVITY`, the `/activity` Wallet endpoint, and the `view_activity`
+chat action are **not installed**. They were removed from the deployed Wallet
+and chat code because the balance overview already provides the useful customer
+context. Activity history is on ice pending a separately designed statement
+and privacy model; do not add `WALLET_ACTIVITY` or `view_activity` back to
+Message Center definitions.
+
 | Definition | When Wallet sends it | Required variables | Initial message copy |
 | --- | --- | --- | --- |
 | `WALLET_CREDIT_REQUIRED` | A billable communication is refused for insufficient credit. `1. Add Free Credits` opens `PROMO_MENU`; `2. Add Paid Credits` opens `WALLET_ADD_CREDITS`. | `businessReferenceLabel`, `requiredCredit`, `availableCredit`, `shortfallCredit`, `creditUnit` | Your credit balance is insufficient to create {{businessReferenceLabel}}. It requires {{requiredCredit}} {{creditUnit}}; your balance is {{availableCredit}} {{creditUnit}}. You need {{shortfallCredit}} {{creditUnit}} more.<br><br>Reply with an option:<br>1. Add Free Credits<br>2. Add Paid Credits |
@@ -492,12 +518,11 @@ price/balance/payer, or choose an Owner-only definition.
 | `WALLET_ADD_CREDITS` | The customer requests a paid top-up and chooses a configured payment provider. Wallet handles the selected action and opens a short-lived, provider-specific secure checkout page. | `wallet_label`, `available_credit_display`, `minimum_top_up_display`, `return_app_label` | {{wallet_label}} available credit: {{available_credit_display}}.<br>Minimum top-up: {{minimum_top_up_display}}.<br><br>Choose a payment method:<br>1. Pay with PayPal<br>2. Pay with Yoco<br>3. Back to Wallet<br>4. {{return_app_label}} |
 | `WALLET_TOPUP_CHECKOUT` | The customer has selected an available payment provider. Wallet creates the one-use checkout-selection URL, then sends this definition. | `provider_label`, `checkout_url` | Continue securely with {{provider_label}}:<br>{{checkout_url}} |
 | `WALLET_TOPUP_SUCCESS` | A provider webhook has been verified and Wallet has atomically settled the purchase ledger entry. It is a non-billable notification, never a browser-return message. | `wallet_label`, `provider_label`, `purchased_credit_display`, `available_credit_display` | Payment received via {{provider_label}}. {{purchased_credit_display}} was added to {{wallet_label}}.<br>Available credit: {{available_credit_display}} |
-| `WALLET_ACTIVITY` | The customer explicitly requests Wallet activity. It is never sent as a normal chat-menu item. | `activitySummary`, `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Recent activity:<br>{{activitySummary}} |
-| `WALLET_SHARE_START` | A current Workspace Owner selects Wallet access sharing. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
-| `WALLET_SHARE_CONFIRM` | Wallet has resolved the proposed recipient and asks the Owner to confirm the pending grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
-| `WALLET_SHARE_PENDING` | The Owner has confirmed and the recipient must accept the grant. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
-| `WALLET_SHARE_RECEIVED` | The recipient has accepted the grant; Wallet notifies the Owner and/or recipient using the appropriate approved copy. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
-| `WALLET_ACCESS_DENIED` | An administrator, worker, ordinary user, or otherwise ineligible identity requests Owner-only Wallet sharing. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. Only the current Workspace Owner can share wallet access. |
+| `WALLET_SHARE_START` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
+| `WALLET_SHARE_CONFIRM` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
+| `WALLET_SHARE_PENDING` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
+| `WALLET_SHARE_RECEIVED` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
+| `WALLET_ACCESS_DENIED` | A customer selects the currently unavailable Wallet-sharing action. | `requestedActionLabel` | You cannot {{requestedActionLabel}} at present. |
 
 `WALLET_ADD_CREDITS` uses Wallet-managed actions, rather than a static Message
 Center next-message link:

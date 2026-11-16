@@ -36,7 +36,6 @@ final class PTC_Chat_App_Wallet {
 		register_rest_route( 'chat-app-wallet/v1', '/overview', array( 'methods' => 'POST', 'callback' => array( $this, 'overview_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/add-credits', array( 'methods' => 'POST', 'callback' => array( $this, 'add_credits_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/topup-checkout', array( 'methods' => 'POST', 'callback' => array( $this, 'topup_checkout_endpoint' ), 'permission_callback' => '__return_true' ) );
-		register_rest_route( 'chat-app-wallet/v1', '/activity', array( 'methods' => 'POST', 'callback' => array( $this, 'activity_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/promo-settlement', array( 'methods' => 'POST', 'callback' => array( $this, 'promo_settlement_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/topup', array( 'methods' => 'POST', 'callback' => array( $this, 'topup_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/topup-page', array( 'methods' => array( 'GET', 'POST' ), 'callback' => array( $this, 'topup_page_endpoint' ), 'permission_callback' => '__return_true' ) );
@@ -149,18 +148,6 @@ final class PTC_Chat_App_Wallet {
 		$token = bin2hex( random_bytes( 32 ) );
 		set_transient( 'ptc_wallet_topup_' . $token, array( 'channel' => $channel, 'identity' => $identity, 'wallet_id' => $wallet_id, 'provider' => $provider ), 15 * MINUTE_IN_SECONDS );
 		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'provider_label' => 'paypal' === $provider ? 'PayPal' : 'Yoco', 'checkout_url' => add_query_arg( 'session', $token, rest_url( 'chat-app-wallet/v1/topup-page' ) ) ) ), 200 );
-	}
-
-	/** Statement data stays Wallet-owned; SB Coms only receives renderable facts. */
-	public function activity_endpoint( WP_REST_Request $request ) {
-		$identity_request = $this->validated_identity_request( $request );
-		if ( is_wp_error( $identity_request ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $identity_request->get_error_code() ), 401 );
-		list( $channel, $identity ) = $identity_request;
-		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $ledger = $wpdb->prefix . 'ptc_wallet_ledger';
-		$wallet_id = $wpdb->get_var( $wpdb->prepare( "SELECT w.wallet_id FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s", $identity, $channel ) );
-		$rows = $wallet_id ? $wpdb->get_results( $wpdb->prepare( "SELECT event_type, credits, created_at FROM $ledger WHERE wallet_id=%s ORDER BY created_at DESC, ledger_id DESC LIMIT 5", $wallet_id ), ARRAY_A ) : array();
-		$summary = array(); foreach ( $rows as $row ) $summary[] = sprintf( '%s %s CRD', sanitize_key( $row['event_type'] ), number_format_i18n( (float) $row['credits'], 3 ) );
-		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'activity_summary' => $summary ? implode( "\n", $summary ) : 'No wallet activity yet.', 'activity_count' => (string) count( $rows ) ) ), 200 );
 	}
 
 	/** Wallet creates the opaque referral code; SB Coms only turns it into a channel link. */

@@ -78,6 +78,10 @@ for five minutes, rounds to cents, and stores that quoted ZAR amount with the
 purchase before it opens Yoco Checkout. The package's USD amount remains the
 commercial source price; the provider's ZAR amount is a settlement snapshot.
 
+Yoco settlement is webhook-only. Wallet verifies the signed `payment.succeeded`
+event and matches `payload.metadata.checkoutId` to the stored Yoco checkout ID;
+the browser success screen never credits a Wallet.
+
 The support UI additionally needs `PTC_WALLET_OPERATIONS_URL` (the deployed
 Supabase `wallet-operations` function URL) and the matching
 `PTC_WALLET_OPERATIONS_TOKEN`. The token is an independent high-entropy secret:

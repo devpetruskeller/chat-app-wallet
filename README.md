@@ -495,12 +495,18 @@ action. The recommended Message Center actions are:
 4. **Suite Menu** (`suite_menu`)
 
 `Share Credits` creates a one-use invitation that expires after seven days for the owner's
-current channel Wallet. The owner privately sends that code to the intended
-recipient, who accepts it from their own verified chat with
-`WALLET ACCEPT <code>`. Acceptance is limited to the same channel, cannot be
-performed by the owner, and atomically creates the active Wallet access grant.
-The code is a capability: it must be treated like a private invitation and
-never published in a group or public message.
+current channel Wallet. Wallet first sends the policy message, then a separate
+`WALLET_SHARE_CODE` message containing only `WALLET ACCEPT <code>`. The owner
+can copy or forward that second message privately to the intended recipient.
+Acceptance is limited to the same channel, cannot be performed by the owner,
+and atomically creates the active Wallet access grant. The code is a
+capability: it must never be published in a group or public message.
+
+This replaces the retired `Continue Share` → confirmation → pending →
+recipient-button sequence. The invitation is created immediately when the
+owner selects **Share Credits**. `continue_share`, `confirm_share`,
+`cancel_share_request`, `accept_shared_wallet`, and `declined_shared_wallet`
+must not be configured in the simplified customer flow.
 
 ### Wallet activity is on ice
 
@@ -514,15 +520,15 @@ Message Center definitions.
 | Definition | When Wallet sends it | Required variables | Initial message copy |
 | --- | --- | --- | --- |
 | `WALLET_CREDIT_REQUIRED` | A billable communication is refused for insufficient credit. `1. Add Free Credits` opens `PROMO_MENU`; `2. Add Paid Credits` opens `WALLET_ADD_CREDITS`. | `businessReferenceLabel`, `requiredCredit`, `availableCredit`, `shortfallCredit`, `creditUnit` | Your credit balance is insufficient to create {{businessReferenceLabel}}. It requires {{requiredCredit}} {{creditUnit}}; your balance is {{availableCredit}} {{creditUnit}}. You need {{shortfallCredit}} {{creditUnit}} more.<br><br>Reply with an option:<br>1. Add Free Credits<br>2. Add Paid Credits |
-| `WALLET_OVERVIEW` | A non-Owner explicitly requests a balance. It offers `1. Add credits`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits |
+| `WALLET_OVERVIEW` | A verified customer explicitly requests `WALLET`. It shows their owned Wallet balance and shared-credit summary, then offers Add Credits, Share Credits, Return To App, and Suite Menu. | `owned_wallet_label`, `owned_credit_display`, `owned_wallet_status`, `shared_access_summary`, `shared_access_count`, `as_of_display`, `return_app_label` | {{owned_wallet_label}}, {{owned_credit_display}}, {{owned_wallet_status}}.<br>{{shared_access_summary}} {{as_of_display}}, {{return_app_label}} |
 | `WALLET_SHOW_CREDITS` | The verified user sends the globally reserved `CREDIT` command. It shows the currently available Wallet credit without opening the Wallet action menu. | `available_credit_display` | Available credit: {{available_credit_display}} |
-| `WALLET_OVERVIEW_OWNER` | A current Workspace Owner explicitly requests a balance. It offers `1. Add credits` and `2. Share wallet with a user`. | `creditBalance`, `creditUnit` | Your wallet balance is {{creditBalance}} {{creditUnit}}.<br><br>Reply with an option:<br>1. Add credits<br>2. Share wallet with a user |
 | `WALLET_ADD_CREDITS` | The customer requests a paid top-up and chooses a configured payment provider. Wallet handles the selected action and opens a short-lived, provider-specific secure checkout page. | `wallet_label`, `available_credit_display`, `minimum_top_up_display`, `return_app_label` | {{wallet_label}} available credit: {{available_credit_display}}.<br>Minimum top-up: {{minimum_top_up_display}}.<br><br>Choose a payment method:<br>1. Pay with PayPal<br>2. Pay with Yoco<br>3. Back to Wallet<br>4. {{return_app_label}} |
 | `WALLET_TOPUP_CHECKOUT` | The customer has selected an available payment provider. Wallet creates the one-use checkout-selection URL, then sends this definition. | `provider_label`, `checkout_url` | Continue securely with {{provider_label}}:<br>{{checkout_url}} |
 | `WALLET_TOPUP_SUCCESS` | A provider webhook has been verified and Wallet has atomically settled the purchase ledger entry. It is a non-billable notification, never a browser-return message. | `wallet_label`, `provider_label`, `purchased_credit_display`, `available_credit_display` | Payment received via {{provider_label}}. {{purchased_credit_display}} was added to {{wallet_label}}.<br>Available credit: {{available_credit_display}} |
-| `WALLET_SHARE_START` | A Wallet owner selects Share Credits. The invitation code is included within `recipientInstruction`. | `wallet_label`, `maximum_limit_display`, `share_policy_summary`, `return_app_label`, `recipientInstruction` | Share credits from {{wallet_label}}.<br><br>Maximum limit: {{maximum_limit_display}}.<br>{{share_policy_summary}}<br><br>{{recipientInstruction}} |
-| `WALLET_SHARE_RECEIVED` | The recipient has accepted a valid invitation from the same channel. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channel: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
-| `WALLET_ACCESS_DENIED` | An invitation is invalid, expired, already accepted, cross-channel, or the recipient tries to accept their own invitation. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. |
+| `WALLET_SHARE_START` | A Wallet owner selects Share Credits. Wallet follows it immediately with `WALLET_SHARE_CODE`. This message has no actions. | `wallet_label`, `maximum_limit_display`, `share_policy_summary` | Share credits from {{wallet_label}}.<br><br>Maximum limit: {{maximum_limit_display}}.<br>{{share_policy_summary}} |
+| `WALLET_SHARE_CODE` | Wallet supplies the private one-use acceptance command immediately after `WALLET_SHARE_START`. This message has no actions. | `accept_command` | Copy or forward this private message to the intended recipient:<br><br>{{accept_command}} |
+| `WALLET_SHARE_RECEIVED` | The recipient has accepted a valid invitation from the same channel. It is a confirmation only, with no Accept or Decline actions. | `wallet_label`, `owner_display`, `access_role_label`, `expires_at_display`, `spending_limit_display` | {{wallet_label}} are now available from {{owner_display}}.<br><br>Role: {{access_role_label}}<br>Expiry: {{expires_at_display}}<br>Spending limit: {{spending_limit_display}} |
+| `WALLET_ACCESS_DENIED` | An invitation is invalid, expired, already accepted, cross-channel, or the recipient tries to accept their own invitation. | `reason_label`, `support_url`, `return_app_label` | {{reason_label}} |
 
 `WALLET_ADD_CREDITS` uses Wallet-managed actions, rather than a static Message
 Center next-message link:

@@ -494,11 +494,13 @@ action. The recommended Message Center actions are:
 3. **Return To App** (`return_to_app`)
 4. **Suite Menu** (`suite_menu`)
 
-`Share Wallet` is visible as the planned next Wallet capability, but its secure
-owner-to-recipient invitation, confirmation, acceptance, and grant-creation
-workflow is **not installed yet**. Until that workflow is deployed,
-`share_access` returns `WALLET_ACCESS_DENIED` and never creates an access
-grant. It must not be represented as a working sharing feature.
+`Share Wallet` creates a one-use invitation that expires after seven days for the owner's
+current channel Wallet. The owner privately sends that code to the intended
+recipient, who accepts it from their own verified chat with
+`WALLET ACCEPT <code>`. Acceptance is limited to the same channel, cannot be
+performed by the owner, and atomically creates the active Wallet access grant.
+The code is a capability: it must be treated like a private invitation and
+never published in a group or public message.
 
 ### Wallet activity is on ice
 
@@ -518,11 +520,9 @@ Message Center definitions.
 | `WALLET_ADD_CREDITS` | The customer requests a paid top-up and chooses a configured payment provider. Wallet handles the selected action and opens a short-lived, provider-specific secure checkout page. | `wallet_label`, `available_credit_display`, `minimum_top_up_display`, `return_app_label` | {{wallet_label}} available credit: {{available_credit_display}}.<br>Minimum top-up: {{minimum_top_up_display}}.<br><br>Choose a payment method:<br>1. Pay with PayPal<br>2. Pay with Yoco<br>3. Back to Wallet<br>4. {{return_app_label}} |
 | `WALLET_TOPUP_CHECKOUT` | The customer has selected an available payment provider. Wallet creates the one-use checkout-selection URL, then sends this definition. | `provider_label`, `checkout_url` | Continue securely with {{provider_label}}:<br>{{checkout_url}} |
 | `WALLET_TOPUP_SUCCESS` | A provider webhook has been verified and Wallet has atomically settled the purchase ledger entry. It is a non-billable notification, never a browser-return message. | `wallet_label`, `provider_label`, `purchased_credit_display`, `available_credit_display` | Payment received via {{provider_label}}. {{purchased_credit_display}} was added to {{wallet_label}}.<br>Available credit: {{available_credit_display}} |
-| `WALLET_SHARE_START` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `recipientInstruction` | Share wallet access with a user. {{recipientInstruction}} |
-| `WALLET_SHARE_CONFIRM` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | You are about to share wallet access with {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Reply CONFIRM to send the invitation. |
-| `WALLET_SHARE_PENDING` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `recipientDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | A wallet-access invitation has been sent to {{recipientDisplayName}}.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}}<br><br>Access remains pending until it is accepted. |
-| `WALLET_SHARE_RECEIVED` | Reserved for the future Wallet-sharing workflow. It is not sent by the deployed chat code. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channels: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
-| `WALLET_ACCESS_DENIED` | A customer selects the currently unavailable Wallet-sharing action. | `requestedActionLabel` | You cannot {{requestedActionLabel}} at present. |
+| `WALLET_SHARE_START` | A Wallet owner selects Share Wallet. The invitation code is included within `recipientInstruction`. | `recipientInstruction` | Share wallet access with a user.<br><br>{{recipientInstruction}} |
+| `WALLET_SHARE_RECEIVED` | The recipient has accepted a valid invitation from the same channel. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channel: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
+| `WALLET_ACCESS_DENIED` | An invitation is invalid, expired, already accepted, cross-channel, or the recipient tries to accept their own invitation. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. |
 
 `WALLET_ADD_CREDITS` uses Wallet-managed actions, rather than a static Message
 Center next-message link:

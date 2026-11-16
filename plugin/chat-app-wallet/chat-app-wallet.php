@@ -34,6 +34,8 @@ final class PTC_Chat_App_Wallet {
 		register_rest_route( 'chat-app-wallet/v1', '/identity-provision', array( 'methods' => 'POST', 'callback' => array( $this, 'provision_identity_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/identity-lifecycle', array( 'methods' => 'POST', 'callback' => array( $this, 'identity_lifecycle_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/overview', array( 'methods' => 'POST', 'callback' => array( $this, 'overview_endpoint' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/share-start', array( 'methods' => 'POST', 'callback' => array( $this, 'share_start_endpoint' ), 'permission_callback' => '__return_true' ) );
+		register_rest_route( 'chat-app-wallet/v1', '/share-accept', array( 'methods' => 'POST', 'callback' => array( $this, 'share_accept_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/add-credits', array( 'methods' => 'POST', 'callback' => array( $this, 'add_credits_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/topup-checkout', array( 'methods' => 'POST', 'callback' => array( $this, 'topup_checkout_endpoint' ), 'permission_callback' => '__return_true' ) );
 		register_rest_route( 'chat-app-wallet/v1', '/promo-settlement', array( 'methods' => 'POST', 'callback' => array( $this, 'promo_settlement_endpoint' ), 'permission_callback' => '__return_true' ) );
@@ -112,6 +114,45 @@ final class PTC_Chat_App_Wallet {
 		$shared = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM $grants WHERE identity_key=%s AND status='active'", $identity ) );
 		$available_credit_display = number_format_i18n( $balance, 3 ) . ' CRD';
 		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'as_of_display' => $as_of, 'available_credit_display' => $available_credit_display, 'owned_credit_display' => $available_credit_display, 'owned_wallet_label' => 'Your Wallet', 'owned_wallet_status' => 'Active', 'return_app_label' => 'Return to app', 'shared_access_count' => (string) (int) $shared, 'shared_access_summary' => (int) $shared ? 'Shared access available.' : 'No shared wallet access.' ) ), 200 );
+	}
+
+	/** Creates a one-use capability that the owner gives to the intended recipient. */
+	public function share_start_endpoint( WP_REST_Request $request ) {
+		$identity_request = $this->validated_identity_request( $request );
+		if ( is_wp_error( $identity_request ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $identity_request->get_error_code() ), 401 );
+		list( $channel, $identity ) = $identity_request;
+		global $wpdb; $wallets = $wpdb->prefix . 'ptc_wallet_wallets'; $entities = $wpdb->prefix . 'ptc_wallet_entities'; $invites = $wpdb->prefix . 'ptc_wallet_share_invitations';
+		$wallet = $wpdb->get_row( $wpdb->prepare( "SELECT w.wallet_id,w.entity_id FROM $wallets w INNER JOIN $entities e ON e.entity_id=w.entity_id WHERE e.identity_key=%s AND w.channel=%s AND w.status='active'", $identity, $channel ), ARRAY_A );
+		if ( ! $wallet ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'wallet_not_active' ), 422 );
+		try { $code = bin2hex( random_bytes( 16 ) ); } catch ( Exception $error ) { return new WP_REST_Response( array( 'ok' => false, 'error' => 'share_invite_unavailable' ), 503 ); }
+		$created = current_time( 'mysql', true ); $expires = gmdate( 'Y-m-d H:i:s', time() + ( 7 * DAY_IN_SECONDS ) );
+		$inserted = $wpdb->insert( $invites, array( 'invitation_id' => wp_generate_uuid4(), 'wallet_id' => $wallet['wallet_id'], 'payer_owner_entity_id' => $wallet['entity_id'], 'channel' => $channel, 'token_hash' => hash( 'sha256', $code ), 'status' => 'pending', 'created_at' => $created, 'expires_at' => $expires ) );
+		if ( ! $inserted ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'share_invite_store_failed' ), 503 );
+		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'recipientInstruction' => 'Send this invitation code privately to the person who should use this wallet. They must reply from the same channel with: WALLET ACCEPT ' . $code ) ), 200 );
+	}
+
+	/** Accepts an invitation only for the recipient's verified, same-channel identity. */
+	public function share_accept_endpoint( WP_REST_Request $request ) {
+		$identity_request = $this->validated_identity_request( $request );
+		if ( is_wp_error( $identity_request ) ) return new WP_REST_Response( array( 'ok' => false, 'error' => $identity_request->get_error_code() ), 401 );
+		list( $channel, $identity, $body ) = $identity_request;
+		$code = strtoupper( sanitize_text_field( $body['invitationCode'] ?? '' ) );
+		$empty = array( 'ok' => true, 'variables' => array( 'shareStatus' => 'unavailable' ) );
+		if ( ! preg_match( '/^[A-F0-9]{32}$/', $code ) ) return new WP_REST_Response( $empty, 200 );
+		global $wpdb; $invites = $wpdb->prefix . 'ptc_wallet_share_invitations'; $grants = $wpdb->prefix . 'ptc_wallet_access_grants'; $entities = $wpdb->prefix . 'ptc_wallet_entities';
+		$wpdb->query( 'START TRANSACTION' );
+		try {
+			$invite = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $invites WHERE token_hash=%s FOR UPDATE", hash( 'sha256', strtolower( $code ) ) ), ARRAY_A );
+			if ( ! $invite || 'pending' !== $invite['status'] || strtotime( $invite['expires_at'] ) <= time() || $invite['channel'] !== $channel ) { $wpdb->query( 'ROLLBACK' ); return new WP_REST_Response( $empty, 200 ); }
+			$owner_identity = $wpdb->get_var( $wpdb->prepare( "SELECT identity_key FROM $entities WHERE entity_id=%s", $invite['payer_owner_entity_id'] ) );
+			if ( ! $owner_identity || hash_equals( $owner_identity, $identity ) ) { $wpdb->query( 'ROLLBACK' ); return new WP_REST_Response( $empty, 200 ); }
+			$grant_id = wp_generate_uuid4();
+			$grant = $wpdb->insert( $grants, array( 'grant_id' => $grant_id, 'wallet_id' => $invite['wallet_id'], 'payer_owner_entity_id' => $invite['payer_owner_entity_id'], 'identity_key' => $identity, 'channel' => $channel, 'spending_limit' => null, 'priority' => 100, 'status' => 'active', 'audit_actor' => 'wallet_share_invitation', 'created_at' => current_time( 'mysql', true ), 'accepted_at' => current_time( 'mysql', true ) ) );
+			$accepted = $wpdb->update( $invites, array( 'status' => 'accepted', 'recipient_identity_key' => $identity, 'accepted_at' => current_time( 'mysql', true ) ), array( 'invitation_id' => $invite['invitation_id'], 'status' => 'pending' ) );
+			if ( ! $grant || 1 !== $accepted ) throw new Exception( 'share_grant_store_failed' );
+			$wpdb->query( 'COMMIT' );
+			return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'shareStatus' => 'accepted', 'counterpartyDisplayName' => 'the Wallet owner', 'eligibleChannelScope' => ucfirst( $channel ), 'spendingLimit' => 'No limit', 'creditUnit' => 'CRD' ) ), 200 );
+		} catch ( Exception $error ) { $wpdb->query( 'ROLLBACK' ); return new WP_REST_Response( $empty, 200 ); }
 	}
 
 	/**
@@ -873,8 +914,9 @@ function ptc_chat_app_wallet_install_schema() {
 	dbDelta( "CREATE TABLE $promo_settlements ( settlement_id char(36) NOT NULL, campaign_id char(36) NOT NULL, recipient_identity varchar(191) NOT NULL, wallet_id char(36) NOT NULL, microcredits bigint NOT NULL, ledger_id char(36) NOT NULL, status varchar(16) NOT NULL, created_at datetime NOT NULL, PRIMARY KEY (settlement_id), UNIQUE KEY ledger_id (ledger_id), KEY recipient_created (recipient_identity, created_at) ) $charset;" );
 		if ( ! $wpdb->get_var( "SHOW COLUMNS FROM $ledger LIKE 'actor'" ) ) $wpdb->query( "ALTER TABLE $ledger ADD COLUMN actor varchar(191) NULL" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	dbDelta( "CREATE TABLE $authorizations ( authorization_id char(36) NOT NULL, wallet_id char(36) NOT NULL, entity_id char(36) NOT NULL, app_id varchar(64) NOT NULL, channel varchar(16) NOT NULL, meter varchar(64) NOT NULL, idempotency_key varchar(191) NOT NULL, reserved_credits decimal(18,6) NOT NULL, state varchar(16) NOT NULL, expires_at datetime NOT NULL, signature char(64) NOT NULL, claims longtext NULL, created_at datetime NOT NULL, PRIMARY KEY (authorization_id), UNIQUE KEY app_idempotency (app_id, idempotency_key), KEY wallet_state (wallet_id, state) ) $charset;" );
-	$grants = $wpdb->prefix . 'ptc_wallet_access_grants';
+	$grants = $wpdb->prefix . 'ptc_wallet_access_grants'; $share_invitations = $wpdb->prefix . 'ptc_wallet_share_invitations';
 	dbDelta( "CREATE TABLE $grants ( grant_id char(36) NOT NULL, wallet_id char(36) NOT NULL, payer_owner_entity_id char(36) NOT NULL, identity_key varchar(191) NOT NULL, channel varchar(16) NOT NULL DEFAULT '*', spending_limit decimal(18,6) NULL, priority int NOT NULL DEFAULT 100, status varchar(16) NOT NULL DEFAULT 'pending', audit_actor varchar(191) NOT NULL, created_at datetime NOT NULL, expires_at datetime NULL, accepted_at datetime NULL, revoked_at datetime NULL, PRIMARY KEY (grant_id), KEY eligible_identity (identity_key,status,priority) ) $charset;" );
+	dbDelta( "CREATE TABLE $share_invitations ( invitation_id char(36) NOT NULL, wallet_id char(36) NOT NULL, payer_owner_entity_id char(36) NOT NULL, channel varchar(16) NOT NULL, token_hash char(64) NOT NULL, status varchar(16) NOT NULL DEFAULT 'pending', recipient_identity_key varchar(191) NULL, created_at datetime NOT NULL, expires_at datetime NOT NULL, accepted_at datetime NULL, PRIMARY KEY (invitation_id), UNIQUE KEY token_hash (token_hash), KEY invitation_status (status,expires_at) ) $charset;" );
 	if ( $wpdb->get_var( "SHOW COLUMNS FROM $grants LIKE 'app_id'" ) ) $wpdb->query( "ALTER TABLE $grants DROP COLUMN app_id" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	foreach ( array( 'expires_at datetime NULL', 'accepted_at datetime NULL' ) as $definition ) {
 		$column = strtok( $definition, ' ' );
@@ -902,9 +944,9 @@ function ptc_chat_app_wallet_install_schema() {
 }
 register_activation_hook( __FILE__, 'ptc_chat_app_wallet_install_schema' );
 function ptc_chat_app_wallet_maybe_upgrade_schema() {
-	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '15' ) {
+	if ( get_option( 'ptc_chat_app_wallet_schema_version' ) !== '16' ) {
 		ptc_chat_app_wallet_install_schema();
-		update_option( 'ptc_chat_app_wallet_schema_version', '15', false );
+		update_option( 'ptc_chat_app_wallet_schema_version', '16', false );
 	}
 	if ( ! wp_next_scheduled( 'ptc_wallet_release_expired_reservations' ) ) wp_schedule_event( time() + MINUTE_IN_SECONDS, 'hourly', 'ptc_wallet_release_expired_reservations' );
 }

@@ -128,7 +128,7 @@ final class PTC_Chat_App_Wallet {
 		$created = current_time( 'mysql', true ); $expires = gmdate( 'Y-m-d H:i:s', time() + ( 7 * DAY_IN_SECONDS ) );
 		$inserted = $wpdb->insert( $invites, array( 'invitation_id' => wp_generate_uuid4(), 'wallet_id' => $wallet['wallet_id'], 'payer_owner_entity_id' => $wallet['entity_id'], 'channel' => $channel, 'token_hash' => hash( 'sha256', $code ), 'status' => 'pending', 'created_at' => $created, 'expires_at' => $expires ) );
 		if ( ! $inserted ) return new WP_REST_Response( array( 'ok' => false, 'error' => 'share_invite_store_failed' ), 503 );
-		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'recipientInstruction' => 'Send this invitation code privately to the person who should use this wallet. They must reply from the same channel with: WALLET ACCEPT ' . $code ) ), 200 );
+		return new WP_REST_Response( array( 'ok' => true, 'variables' => array( 'wallet_label' => 'Your Wallet', 'maximum_limit_display' => 'No limit', 'share_policy_summary' => 'The recipient may use your available credits for billable messages on this channel.', 'return_app_label' => 'Return to app', 'recipientInstruction' => 'Send this invitation code privately to the person who should use these credits. They must reply from the same channel with: WALLET ACCEPT ' . $code ) ), 200 );
 	}
 
 	/** Accepts an invitation only for the recipient's verified, same-channel identity. */

@@ -490,11 +490,11 @@ overview as the customer's Wallet context, but do not include an activity
 action. The recommended Message Center actions are:
 
 1. **Add Credits** (`add_credits`)
-2. **Share Wallet** (`share_access`)
+2. **Share Credits** (`share_access`)
 3. **Return To App** (`return_to_app`)
 4. **Suite Menu** (`suite_menu`)
 
-`Share Wallet` creates a one-use invitation that expires after seven days for the owner's
+`Share Credits` creates a one-use invitation that expires after seven days for the owner's
 current channel Wallet. The owner privately sends that code to the intended
 recipient, who accepts it from their own verified chat with
 `WALLET ACCEPT <code>`. Acceptance is limited to the same channel, cannot be
@@ -520,7 +520,7 @@ Message Center definitions.
 | `WALLET_ADD_CREDITS` | The customer requests a paid top-up and chooses a configured payment provider. Wallet handles the selected action and opens a short-lived, provider-specific secure checkout page. | `wallet_label`, `available_credit_display`, `minimum_top_up_display`, `return_app_label` | {{wallet_label}} available credit: {{available_credit_display}}.<br>Minimum top-up: {{minimum_top_up_display}}.<br><br>Choose a payment method:<br>1. Pay with PayPal<br>2. Pay with Yoco<br>3. Back to Wallet<br>4. {{return_app_label}} |
 | `WALLET_TOPUP_CHECKOUT` | The customer has selected an available payment provider. Wallet creates the one-use checkout-selection URL, then sends this definition. | `provider_label`, `checkout_url` | Continue securely with {{provider_label}}:<br>{{checkout_url}} |
 | `WALLET_TOPUP_SUCCESS` | A provider webhook has been verified and Wallet has atomically settled the purchase ledger entry. It is a non-billable notification, never a browser-return message. | `wallet_label`, `provider_label`, `purchased_credit_display`, `available_credit_display` | Payment received via {{provider_label}}. {{purchased_credit_display}} was added to {{wallet_label}}.<br>Available credit: {{available_credit_display}} |
-| `WALLET_SHARE_START` | A Wallet owner selects Share Wallet. The invitation code is included within `recipientInstruction`. | `recipientInstruction` | Share wallet access with a user.<br><br>{{recipientInstruction}} |
+| `WALLET_SHARE_START` | A Wallet owner selects Share Credits. The invitation code is included within `recipientInstruction`. | `wallet_label`, `maximum_limit_display`, `share_policy_summary`, `return_app_label`, `recipientInstruction` | Share credits from {{wallet_label}}.<br><br>Maximum limit: {{maximum_limit_display}}.<br>{{share_policy_summary}}<br><br>{{recipientInstruction}} |
 | `WALLET_SHARE_RECEIVED` | The recipient has accepted a valid invitation from the same channel. | `counterpartyDisplayName`, `eligibleChannelScope`, `spendingLimit`, `creditUnit` | Wallet access with {{counterpartyDisplayName}} is now active.<br><br>Channel: {{eligibleChannelScope}}<br>Spending limit: {{spendingLimit}} {{creditUnit}} |
 | `WALLET_ACCESS_DENIED` | An invitation is invalid, expired, already accepted, cross-channel, or the recipient tries to accept their own invitation. | `requestedActionLabel` | You cannot {{requestedActionLabel}}. |
 
